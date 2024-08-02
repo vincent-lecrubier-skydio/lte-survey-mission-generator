@@ -1,6 +1,7 @@
 import streamlit as st
 import json
 from shapely.geometry import shape, LineString, mapping
+from shapely.ops import linemerge
 import numpy as np
 
 
@@ -28,17 +29,28 @@ def generate_lawnmower_pattern(polygon, spacing):
     lawnmower_lines = [
         line for line in lawnmower_lines if not line.is_empty and line.geom_type == 'LineString']
 
-    return lawnmower_lines
+    # Connect the lines
+    connected_lines = []
+    for i in range(len(lawnmower_lines) - 1):
+        connected_lines.append(lawnmower_lines[i])
+        start_point = lawnmower_lines[i].coords[-1]
+        end_point = lawnmower_lines[i + 1].coords[0]
+        connected_lines.append(LineString([start_point, end_point]))
+    connected_lines.append(lawnmower_lines[-1])
+
+    merged_line = linemerge(connected_lines)
+
+    return merged_line
 
 
 file = st.file_uploader("Upload a file", type=["json", "geojson"])
 if file is not None:
     content = file.read()
     geojson = json.loads(content)
-    polygon = shape(geojson.get('features')[0].get('geometry'))
-    lawnmower_pattern = generate_lawnmower_pattern(polygon, spacing=0.02)
+    input_polygon = shape(geojson.get('features')[0].get('geometry'))
+    lawnmower_pattern = generate_lawnmower_pattern(input_polygon, spacing=0.02)
     result_geojson = {
         "type": "FeatureCollection",
-        "features": [{"type": "Feature", "properties": {}, "geometry": mapping(line)} for line in lawnmower_pattern]
+        "features": [{"type": "Feature", "properties": {}, "geometry": mapping(lawnmower_pattern)}]
     }
     st.code(json.dumps(result_geojson, indent=2), language='json')
