@@ -100,12 +100,14 @@ def split_polygon_into_squares(polygon, size):
 
 
 file = st.file_uploader(
-    "Upload a geojson file (from geojson.io) of a single polygon that you want to scan", type=["json", "geojson"])
+    "Upload a geojson file (from geojson.io) with one polygon of the entire city boundary that you want to scan", type=["json", "geojson"])
+
+st.text("We split that polygon into many separate squares, each representing a mission to fly")
 square_size = st.number_input(
     "Size of mission squares, in meters", min_value=100, value=800)
 st.text(
     f"Square size = {square_size:.0f}m = {square_size*3.28084:.0f}ft = {square_size*1.09361:.0f}yd = {square_size/1609:.2f} Miles = {square_size/1852:.2f} Nautical Miles")
-
+st.text("For each square, we generate a lawnmower pattern to scan the area with a given spacing between passes")
 spacing = st.number_input(
     "Spacing between passes in meters", min_value=10, value=50)
 st.text(
@@ -118,10 +120,10 @@ st.text(
 
 
 cost_fixed = st.number_input(
-    "Fixed cost for the whole program", min_value=0, value=5000)
+    "Fixed base cost for the whole program", min_value=0, value=5000)
 
 cost_per_flight = st.number_input(
-    "Fixed cost base per flight mission", min_value=0, value=100)
+    "Fixed cost per flight mission", min_value=0, value=100)
 
 cost_per_flight_hour = st.number_input(
     "Variable cost per flight hour", min_value=0, value=50)
@@ -160,7 +162,7 @@ if file is not None:
     with st.expander("See geojson with all mission squares"):
         result_squares_geojson = {
             "type": "FeatureCollection",
-            "features": [{"type": "Feature", "properties": {}, "geometry": mapping(square)} for square in squares]
+            "features": [{"type": "Feature", "properties": {"mission_number": i+1}, "geometry": mapping(square)} for i, square in enumerate(squares)]
         }
         st.code(json.dumps(result_squares_geojson, indent=2), language='json')
 
