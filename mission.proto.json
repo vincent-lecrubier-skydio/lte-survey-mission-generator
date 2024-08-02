@@ -1,0 +1,69 @@
+{
+  "utime": 0,
+  "uuid": "",
+  "displayName": "",
+  "templateUuid": "",
+  "actions": [
+    {
+      "actionUuid": "11ca7641-7037-407c-9f2e-23348f4abe63",
+      "actionKey": "Sequence",
+      "args": {
+        "sequence": {
+          "name": "root_sequence",
+          "actions": [],
+          "hideReverseUi": false
+        },
+        "photoOnCompletion": false,
+        "isSkippable": false
+      }
+    }
+  ],
+  "postMissionAction": 4,
+  "postFailureAction": 4,
+  "lostConnectionAction": 2,
+  "scheduledMissionUuid": "",
+  "missionRunnerSkill": 0,
+  "flightId": "",
+  "ncpgFileId": "",
+  "globalGraphFileId": "",
+  "dockMission": true,
+  "autoStart": true,
+  "needsGpsInitializationMove": false,
+  "returnToPathOnResume": false,
+  "showSkipUi": true,
+  "useRecordingMode": true,
+  "recordingMode": 1,
+  "useIsoMode": false,
+  "isoMode": 0,
+  "useExposureMode": false,
+  "exposureMode": 0,
+  "useAwbMode": false,
+  "awbMode": 0,
+  "useCompensationMode": false,
+  "compensationMode": 0,
+  "autonomousAbortMissionOnFailedAction": true,
+  "enableFaultBasedDirectRtd": false,
+  "needsNcpgInitialization": false,
+  "videoBitrateOverride": 0,
+  "navigationModeOverrideEnabled": false,
+  "navigationModeOverride": 0,
+  "useRtxSettings": true,
+  "rtxSettings": {
+    "faceForward": true,
+    "minimumHeight": 30.48,
+    "waitTime": 30,
+    "speed": 2,
+    "ascendFromCurrentHeight": false,
+    "landOnceReturned": false,
+    "waitTimeBeforeLand": 0,
+    "dontReturnOnLostComms": false,
+    "useBacktrack": false,
+    "lowBatteryAutoRth": false,
+    "dontDescend": false,
+    "dontReturnOnLostCommsInAtti": false,
+    "attiReturnAltAgl": 0
+  },
+  "needsGlobalGraph": false,
+  "disableStrobeLights": false,
+  "skipUpload": false
+}

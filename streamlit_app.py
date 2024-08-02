@@ -6,6 +6,8 @@ import numpy as np
 import pyproj
 import math
 from shapely.ops import transform
+import uuid
+from datetime import datetime
 
 
 def generate_lawnmower_pattern(polygon, spacing):
@@ -99,10 +101,112 @@ def split_polygon_into_squares(polygon, size):
     return squares
 
 
-file = st.file_uploader(
+def generate_mission(linestring, index):
+    with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
+        mission_proto = json.load(mission_proto_file)
+        mission_proto["displayName"] = f"LTE Scan - {index} - {datetime.now().isoformat()}"
+        mission_proto["templateUuid"] = str(uuid.uuid4())
+        mission_proto["actions"][0]["actionUuid"] = str(uuid.uuid4())
+        mission_proto['actions'][0]['args']['sequence']["actions"] = [
+            {
+                "actionUuid": str(uuid.uuid4()),
+                "actionKey": "Sequence",
+                "args": {
+                    "sequence": {
+                        "name": "",
+                        "actions": [
+                            {
+                                "actionUuid": str(uuid.uuid4()),
+                                "actionKey": "SetObstacleAvoidance",
+                                "args": {
+                                    "setObstacleAvoidance": {
+                                        "oaSetting": 1
+                                    },
+                                    "photoOnCompletion": False,
+                                    "isSkippable": False
+                                }
+                            },
+                            {
+                                "actionUuid": str(uuid.uuid4()),
+                                "actionKey": "StopVideo",
+                                "args": {
+                                    "stopVideo": {
+                                        "noArgs": False
+                                    },
+                                    "photoOnCompletion": False,
+                                    "isSkippable": False
+                                }
+                            },
+                            {
+                                "actionUuid": str(uuid.uuid4()),
+                                "actionKey": "GotoWaypoint",
+                                "args": {
+                                    "gotoWaypoint": {
+                                        "waypoint": {
+                                            "xy": {
+                                                "frame": 3,
+                                                "x": point[1],
+                                                "y": point[0]
+                                            },
+                                            "z": {
+                                                "frame": 5,
+                                                "value": 61.0  # m = 200ft
+                                            },
+                                            "heading": {
+                                                "value": 1.5707963267948966,
+                                                "frame": 3
+                                            },
+                                            "gimbalPitch": {
+                                                "value": 0.523  # 30 deg down
+                                            }
+                                        },
+                                        "motionArgs": {
+                                            "traversalArgs": {
+                                                "heightMode": 1,
+                                                "speed": 16.0  # m/s = 36mph
+                                            },
+                                            "lookAtArgs": {
+                                                "ignoreTargetHeading": False,
+                                                "headingMode": 7,
+                                                "ignoreTargetGimbalPitch": False,
+                                                "gimbalPitchMode": 1
+                                            }
+                                        }
+                                    },
+                                    "photoOnCompletion": False,
+                                    "isSkippable": False
+                                }
+                            },
+                            {
+                                "actionUuid": str(uuid.uuid4()),
+                                "actionKey": "SetObstacleAvoidance",
+                                "args": {
+                                    "setObstacleAvoidance": {
+                                        "oaSetting": 1
+                                    },
+                                    "photoOnCompletion": False,
+                                    "isSkippable": False
+                                }
+                            }
+                        ],
+                        "hideReverseUi": False
+                    },
+                    "photoOnCompletion": False,
+                    "isSkippable": False
+                }
+            }
+            for point in linestring.coords
+        ]
+
+        # return json string
+        return json.dumps(mission_proto, indent=2)
+
+
+mission_file = st.file_uploader(
     "Upload a geojson file (from geojson.io) with one polygon of the entire city boundary that you want to scan", type=["json", "geojson"])
 
-st.markdown("We split that polygon into many separate squares, each representing a mission to fly")
+st.markdown(
+    "We split that polygon into many separate squares, each representing a mission to fly")
 square_size = st.number_input(
     "Size of mission squares, in meters", min_value=100, value=800)
 st.markdown(
@@ -136,14 +240,20 @@ mission_length = (  # horizontal passes
     square_size *  # length of each leg
     math.ceil(square_size/spacing)  # number of legs
     + square_size  # total length of transitions between legs
-) + (  # return to base, diagonal
-    math.sqrt(square_size**2 + square_size**2)
+) + (
+    square_size  # go to start
+) + (
+    square_size  # return to base
 )
 
-mission_duration = mission_length/speed
+mission_duration = (
+    mission_length/speed  # time moving
+    + math.ceil(square_size/spacing) * 4  # number of waypoints
+    * 6.0  # time lost at each waypoints (slowing, stopped, accelerating)
+)
 
-if file is not None:
-    content = file.read()
+if mission_file is not None:
+    content = mission_file.read()
     geojson = json.loads(content)
     input_polygon = shape(geojson.get('features')[0].get('geometry'))
 
@@ -167,7 +277,7 @@ if file is not None:
         st.code(json.dumps(result_squares_geojson, indent=2), language='json')
 
     with st.expander("See geojson for a given mission"):
-        input_square_index = st.number_input("Index of mission to inspect",
+        input_square_index = st.number_input("Index of mission to view",
                                              min_value=1, max_value=len(squares), value=1)
         input_square = squares[input_square_index-1]
         lawnmower_pattern = generate_lawnmower_pattern(
@@ -177,3 +287,21 @@ if file is not None:
             "features": [{"type": "Feature", "properties": {}, "geometry": mapping(lawnmower_pattern)}]
         }
         st.code(json.dumps(result_geojson, indent=2), language='json')
+
+    with st.expander("Get mission json for a given mission"):
+        input_square_index = st.number_input("Index of mission to get",
+                                             min_value=1, max_value=len(squares), value=1)
+        input_square = squares[input_square_index-1]
+        lawnmower_pattern = generate_lawnmower_pattern(
+            input_square, spacing=spacing)
+
+        if st.button("Generate File"):
+            mission_json_data = generate_mission(
+                lawnmower_pattern, input_square_index)
+
+            st.download_button(
+                label="Download mission.json",
+                data=mission_json_data,
+                file_name="mission.json",
+                mime="application/json",
+            )
