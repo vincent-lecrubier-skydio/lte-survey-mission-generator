@@ -102,20 +102,20 @@ def split_polygon_into_squares(polygon, size):
 file = st.file_uploader(
     "Upload a geojson file (from geojson.io) with one polygon of the entire city boundary that you want to scan", type=["json", "geojson"])
 
-st.text("We split that polygon into many separate squares, each representing a mission to fly")
+st.markdown("We split that polygon into many separate squares, each representing a mission to fly")
 square_size = st.number_input(
     "Size of mission squares, in meters", min_value=100, value=800)
-st.text(
+st.markdown(
     f"Square size = {square_size:.0f}m = {square_size*3.28084:.0f}ft = {square_size*1.09361:.0f}yd = {square_size/1609:.2f} Miles = {square_size/1852:.2f} Nautical Miles")
-st.text("For each square, we generate a lawnmower pattern to scan the area with a given spacing between passes")
+st.markdown("For each square, we generate a lawnmower pattern to scan the area with a given spacing between passes")
 spacing = st.number_input(
     "Spacing between passes in meters", min_value=10, value=50)
-st.text(
+st.markdown(
     f"Spacing = {spacing:.0f}m = {spacing*3.28084:.0f}ft = {spacing*1.09361:.0f}yd = {spacing/1609:.2f} Miles = {spacing/1852:.2f} Nautical Miles")
 
 speed = st.number_input(
     "Flight speed in meters per second", min_value=0, value=14)
-st.text(
+st.markdown(
     f"Flight speed = {speed:.0f}m/s = {speed*3.6:.1f}km/h = {speed*3600/1609:.1f}Mph = {speed*3600/1852:.1f}kts")
 
 
@@ -149,14 +149,14 @@ if file is not None:
 
     squares = split_polygon_into_squares(input_polygon, size=square_size)
 
-    st.text(f"Total number of missions to fly: {len(squares)}")
-    st.text(
+    st.markdown(f"Total number of missions to fly: {len(squares)}")
+    st.markdown(
         f"Length of each mission = {mission_length:.0f}m = {mission_length*3.28084:.0f}ft = {mission_length*1.09361:.0f}yd = {mission_length/1609:.2f} Miles = {mission_length/1852:.2f} Nautical Miles")
-    st.text(
+    st.markdown(
         f"Duration of each mission = {mission_duration:.0f}s = {mission_duration/60:.0f}min")
-    st.text(
+    st.markdown(
         f"Total flight hours (Conservative) = {len(squares)*mission_duration/3600:.0f}h")
-    st.text(
+    st.markdown(
         f"Total cost = ${cost_fixed + (len(squares) * (cost_per_flight + (mission_duration/3600)* cost_per_flight_hour)) :,.0f}")
 
     with st.expander("See geojson with all mission squares"):
