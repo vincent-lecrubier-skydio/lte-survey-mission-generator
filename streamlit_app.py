@@ -8,7 +8,13 @@ import math
 from shapely.ops import transform
 import uuid
 from datetime import datetime
+import httpx
+import asyncio
 
+import numpy as np
+from shapely.geometry import LineString, Polygon
+from shapely.ops import transform, linemerge
+import pyproj
 
 def generate_lawnmower_pattern(polygon, spacing):
     bounds = polygon.bounds
@@ -54,14 +60,28 @@ def generate_lawnmower_pattern(polygon, spacing):
         start_point = lawnmower_lines[i].coords[-1]
         end_point = lawnmower_lines[i + 1].coords[0]
         connected_lines.append(LineString([start_point, end_point]))
-    connected_lines.append(lawnmower_lines[-1])
+    if len(lawnmower_lines) > 1:
+        connected_lines.append(lawnmower_lines[-1])
 
     merged_line = linemerge(connected_lines)
 
     # Convert the merged line back to WGS84 coordinates
     wgs84_merged_line = transform(project_to_wgs84, merged_line)
 
-    return wgs84_merged_line
+    print(wgs84_merged_line.geom_type)
+
+    if wgs84_merged_line.geom_type == 'MultiLineString' or wgs84_merged_line.geom_type == 'GeometryCollection':
+        coords = [coord for line in wgs84_merged_line.geoms for coord in line.coords]
+
+    else:
+        coords = wgs84_merged_line.coords
+
+    for point in coords:
+        point = list(point)
+        print(point)
+
+    return LineString(coords)
+
 
 
 def split_polygon_into_squares(polygon, size):
@@ -101,10 +121,10 @@ def split_polygon_into_squares(polygon, size):
     return squares
 
 
-def generate_mission(linestring, index):
+def generate_mission(linestring, index, name_prefix="LTE Scan"):
     with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
         mission_proto = json.load(mission_proto_file)
-        mission_proto["displayName"] = f"LTE Scan - {index} - {datetime.now().isoformat()}"
+        mission_proto["displayName"] = f"{name_prefix} - {index} - {datetime.now().isoformat()}"
         mission_proto["templateUuid"] = str(uuid.uuid4())
         mission_proto["actions"][0]["actionUuid"] = str(uuid.uuid4())
         mission_proto['actions'][0]['args']['sequence']["actions"] = [
@@ -305,3 +325,45 @@ if mission_file is not None:
                 file_name="mission.json",
                 mime="application/json",
             )
+
+    api_key = st.text_input("Enter your API key", type="password")
+
+    name_prefix = st.text_input("Enter a prefix for the mission names", value="LTE Scan")
+
+    async def upload_mission(session, request_url, headers, mission_json_data, i):
+        response = await session.post(request_url, headers=headers, data=mission_json_data)
+        if response.status_code != 200:
+            return f"Mission {i}: {response.text}"
+        return None
+
+    async def upload_missions():
+        request_url = "https://cloudapi--main--ws-staging--vikram-khandelwal.coder.dev.skyd.io/api/v0/mission_document/template"
+
+        headers = {
+            "Authorization": f"{api_key}",
+            "Content-Type": "application/json"
+        }
+        error_messages = []
+
+        async with httpx.AsyncClient() as session:
+            tasks = []
+            for i, square in enumerate(squares, start=1):
+                lawnmower_pattern = generate_lawnmower_pattern(square, spacing)
+                if lawnmower_pattern.is_empty:
+                    continue
+                mission_json_data = generate_mission(lawnmower_pattern, i, name_prefix)
+                tasks.append(upload_mission(session, request_url, headers, mission_json_data, i))
+
+            results = await asyncio.gather(*tasks)
+
+        for result in results:
+            if result:
+                error_messages.append(result)
+
+        if error_messages:
+            st.error("Errors occurred during the upload:\n" + "\n".join(error_messages))
+        else:
+            st.success("All missions uploaded successfully!")
+
+    if st.button("Upload Missions"):
+        asyncio.run(upload_missions())
