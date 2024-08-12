@@ -68,8 +68,6 @@ def generate_lawnmower_pattern(polygon, spacing):
     # Convert the merged line back to WGS84 coordinates
     wgs84_merged_line = transform(project_to_wgs84, merged_line)
 
-    print(wgs84_merged_line.geom_type)
-
     if wgs84_merged_line.geom_type == 'MultiLineString' or wgs84_merged_line.geom_type == 'GeometryCollection':
         coords = [coord for line in wgs84_merged_line.geoms for coord in line.coords]
 
@@ -78,7 +76,6 @@ def generate_lawnmower_pattern(polygon, spacing):
 
     for point in coords:
         point = list(point)
-        print(point)
 
     return LineString(coords)
 
