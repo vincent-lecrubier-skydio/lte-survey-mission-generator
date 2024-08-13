@@ -16,7 +16,8 @@ from shapely.geometry import LineString, Polygon
 from shapely.ops import transform, linemerge
 import pyproj
 
-def generate_lawnmower_pattern(polygon, spacing):
+
+def generate_lawnmower_pattern(polygon, spacing, passes):
     bounds = polygon.bounds
     minx, miny, maxx, maxy = bounds
 
@@ -35,19 +36,21 @@ def generate_lawnmower_pattern(polygon, spacing):
 
     lines = []
 
-    x_coords = np.arange(minx, maxx, spacing)
-    for i, x in enumerate(x_coords):
-        if i % 2 == 0:
-            lines.append(LineString([(x, miny), (x, maxy)]))
-        else:
-            lines.append(LineString([(x, maxy), (x, miny)]))
+    if "North-South" in passes:
+        x_coords = np.arange(minx, maxx, spacing)
+        for i, x in enumerate(x_coords):
+            if i % 2 == 0:
+                lines.append(LineString([(x, miny), (x, maxy)]))
+            else:
+                lines.append(LineString([(x, maxy), (x, miny)]))
 
-    y_coords = np.arange(miny, maxy, spacing)
-    for i, y in enumerate(y_coords):
-        if i % 2 == 0:
-            lines.append(LineString([(minx, y), (maxx, y)]))
-        else:
-            lines.append(LineString([(maxx, y), (minx, y)]))
+    if "East-West" in passes:
+        y_coords = np.arange(miny, maxy, spacing)
+        for i, y in enumerate(y_coords):
+            if i % 2 == 0:
+                lines.append(LineString([(minx, y), (maxx, y)]))
+            else:
+                lines.append(LineString([(maxx, y), (minx, y)]))
 
     lawnmower_lines = [line.intersection(utm_polygon) for line in lines]
     lawnmower_lines = [
@@ -69,7 +72,8 @@ def generate_lawnmower_pattern(polygon, spacing):
     wgs84_merged_line = transform(project_to_wgs84, merged_line)
 
     if wgs84_merged_line.geom_type == 'MultiLineString' or wgs84_merged_line.geom_type == 'GeometryCollection':
-        coords = [coord for line in wgs84_merged_line.geoms for coord in line.coords]
+        coords = [
+            coord for line in wgs84_merged_line.geoms for coord in line.coords]
 
     else:
         coords = wgs84_merged_line.coords
@@ -78,7 +82,6 @@ def generate_lawnmower_pattern(polygon, spacing):
         point = list(point)
 
     return LineString(coords)
-
 
 
 def split_polygon_into_squares(polygon, size):
@@ -118,7 +121,7 @@ def split_polygon_into_squares(polygon, size):
     return squares
 
 
-def generate_mission(linestring, index, name_prefix="LTE Scan"):
+def generate_mission(linestring, index, altitude, name_prefix="LTE Scan"):
     with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
         mission_proto = json.load(mission_proto_file)
         mission_proto["displayName"] = f"{name_prefix} - {index} - {datetime.now().isoformat()}"
@@ -222,32 +225,42 @@ def generate_mission(linestring, index, name_prefix="LTE Scan"):
 mission_file = st.file_uploader(
     "Upload a geojson file (from geojson.io) with one polygon of the entire city boundary that you want to scan", type=["json", "geojson"])
 
+passes = st.multiselect(
+    "Which scan passes do you want to fly?",
+    ["North-South", "East-West"],
+    ["North-South"],
+)
+
 st.markdown(
     "We split that polygon into many separate squares, each representing a mission to fly")
 square_size = st.number_input(
-    "Size of mission squares, in meters", min_value=100, value=800)
+    "Size of mission squares, in meter:", min_value=100, value=800)
 st.markdown(
     f"Square size = {square_size:.0f}m = {square_size*3.28084:.0f}ft = {square_size*1.09361:.0f}yd = {square_size/1609:.2f} Miles = {square_size/1852:.2f} Nautical Miles")
 st.markdown("For each square, we generate a lawnmower pattern to scan the area with a given spacing between passes")
 spacing = st.number_input(
-    "Spacing between passes in meters", min_value=10, value=50)
+    "Spacing between passes in meters:", min_value=10, value=50)
 st.markdown(
     f"Spacing = {spacing:.0f}m = {spacing*3.28084:.0f}ft = {spacing*1.09361:.0f}yd = {spacing/1609:.2f} Miles = {spacing/1852:.2f} Nautical Miles")
 
 speed = st.number_input(
-    "Flight speed in meters per second", min_value=0, value=14)
+    "Flight speed in meters per second:", min_value=0, value=14)
 st.markdown(
     f"Flight speed = {speed:.0f}m/s = {speed*3.6:.1f}km/h = {speed*3600/1609:.1f}Mph = {speed*3600/1852:.1f}kts")
 
+altitude = st.number_input(
+    "Flight altitude in meters:", min_value=10, value=61)
+st.markdown(
+    f"Altitude = {altitude:.0f}m = {altitude*3.28084:.0f}ft = {altitude*1.09361:.0f}yd = {altitude/1609:.2f} Miles = {altitude/1852:.2f} Nautical Miles")
 
 cost_fixed = st.number_input(
-    "Fixed base cost for the whole program", min_value=0, value=5000)
+    "Fixed base cost for the whole program:", min_value=0, value=5000)
 
 cost_per_flight = st.number_input(
-    "Fixed cost per flight mission", min_value=0, value=100)
+    "Fixed cost per flight mission:", min_value=0, value=100)
 
 cost_per_flight_hour = st.number_input(
-    "Variable cost per flight hour", min_value=0, value=50)
+    "Variable cost per flight hour:", min_value=0, value=50)
 
 mission_length = (  # horizontal passes
     square_size *  # length of each leg
@@ -281,6 +294,9 @@ if mission_file is not None:
         f"Length of each mission = {mission_length:.0f}m = {mission_length*3.28084:.0f}ft = {mission_length*1.09361:.0f}yd = {mission_length/1609:.2f} Miles = {mission_length/1852:.2f} Nautical Miles")
     st.markdown(
         f"Duration of each mission = {mission_duration:.0f}s = {mission_duration/60:.0f}min")
+    if mission_duration > 1800:
+        st.markdown(
+            ":red[**Mission are longer than 30 minutes! They probably are not going to be flyable**]")
     st.markdown(
         f"Total flight hours (Conservative) = {len(squares)*mission_duration/3600:.0f}h")
     st.markdown(
@@ -298,7 +314,7 @@ if mission_file is not None:
                                              min_value=1, max_value=len(squares), value=1)
         input_square = squares[input_square_index-1]
         lawnmower_pattern = generate_lawnmower_pattern(
-            input_square, spacing=spacing)
+            input_square, spacing=spacing, passes=passes)
         result_geojson = {
             "type": "FeatureCollection",
             "features": [{"type": "Feature", "properties": {}, "geometry": mapping(lawnmower_pattern)}]
@@ -310,11 +326,11 @@ if mission_file is not None:
                                              min_value=1, max_value=len(squares), value=1)
         input_square = squares[input_square_index-1]
         lawnmower_pattern = generate_lawnmower_pattern(
-            input_square, spacing=spacing)
+            input_square, spacing=spacing, passes=passes)
 
         if st.button("Generate File"):
             mission_json_data = generate_mission(
-                lawnmower_pattern, input_square_index)
+                lawnmower_pattern, input_square_index, altitude)
 
             st.download_button(
                 label="Download mission.json",
@@ -323,44 +339,50 @@ if mission_file is not None:
                 mime="application/json",
             )
 
-    api_key = st.text_input("Enter your API key", type="password")
+    with st.expander("Upload all missions to Skydio Cloud"):
+        api_key = st.text_input("Enter your API key", type="password")
 
-    name_prefix = st.text_input("Enter a prefix for the mission names", value="LTE Scan")
+        name_prefix = st.text_input(
+            "Enter a prefix for the mission names", value="LTE Scan")
 
-    async def upload_mission(session, request_url, headers, mission_json_data, i):
-        response = await session.post(request_url, headers=headers, data=mission_json_data)
-        if response.status_code != 200:
-            return f"Mission {i}: {response.text}"
-        return None
+        async def upload_mission(session, request_url, headers, mission_json_data, i):
+            response = await session.post(request_url, headers=headers, data=mission_json_data)
+            if response.status_code != 200:
+                return f"Mission {i}: {response.text}"
+            return None
 
-    async def upload_missions():
-        request_url = "https://cloudapi--main--ws-staging--vikram-khandelwal.coder.dev.skyd.io/api/v0/mission_document/template"
+        async def upload_missions():
+            request_url = "https://cloudapi--main--ws-staging--vikram-khandelwal.coder.dev.skyd.io/api/v0/mission_document/template"
 
-        headers = {
-            "Authorization": f"{api_key}",
-            "Content-Type": "application/json"
-        }
-        error_messages = []
+            headers = {
+                "Authorization": f"{api_key}",
+                "Content-Type": "application/json"
+            }
+            error_messages = []
 
-        async with httpx.AsyncClient() as session:
-            tasks = []
-            for i, square in enumerate(squares, start=1):
-                lawnmower_pattern = generate_lawnmower_pattern(square, spacing)
-                if lawnmower_pattern.is_empty:
-                    continue
-                mission_json_data = generate_mission(lawnmower_pattern, i, name_prefix)
-                tasks.append(upload_mission(session, request_url, headers, mission_json_data, i))
+            async with httpx.AsyncClient() as session:
+                tasks = []
+                for i, square in enumerate(squares, start=1):
+                    lawnmower_pattern = generate_lawnmower_pattern(
+                        square, spacing=spacing, passes=passes)
+                    if lawnmower_pattern.is_empty:
+                        continue
+                    mission_json_data = generate_mission(
+                        lawnmower_pattern, i, altitude, name_prefix)
+                    tasks.append(upload_mission(session, request_url,
+                                                headers, mission_json_data, i))
 
-            results = await asyncio.gather(*tasks)
+                results = await asyncio.gather(*tasks)
 
-        for result in results:
-            if result:
-                error_messages.append(result)
+            for result in results:
+                if result:
+                    error_messages.append(result)
 
-        if error_messages:
-            st.error("Errors occurred during the upload:\n" + "\n".join(error_messages))
-        else:
-            st.success("All missions uploaded successfully!")
+            if error_messages:
+                st.error("Errors occurred during the upload:\n" +
+                         "\n".join(error_messages))
+            else:
+                st.success("All missions uploaded successfully!")
 
-    if st.button("Upload Missions"):
-        asyncio.run(upload_missions())
+        if st.button("Upload Missions"):
+            asyncio.run(upload_missions())
