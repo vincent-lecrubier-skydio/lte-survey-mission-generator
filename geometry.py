@@ -148,3 +148,45 @@ def stgeodataframe(df):
     # st.write(dftodisplay.shape)
     # st.write(dftodisplay.columns)
     st.dataframe(dftodisplay)
+
+
+def generate_corridors(polygons,origin,direction,width ):
+
+    # Convert direction to radians
+    direction_rad = np.deg2rad(direction)
+
+    # Define a base line along the specified direction
+    length = 1000000  # Arbitrary large length for the line
+    dx = length * np.cos(direction_rad)
+    dy = length * np.sin(direction_rad)
+    base_line = LineString([origin, (origin[0] + dx, origin[1] + dy)])
+
+    # Generate parallel corridor lines
+    corridor_lines = []
+    for i in range(-50, 51):  # Generate lines on both sides of the origin
+        offset = i * width
+        parallel_line = translate(base_line, xoff=-dy * offset / length, yoff=dx * offset / length)
+        corridor_lines.append(parallel_line)
+
+    # Convert corridor lines into polygons (corridors)
+    corridor_polygons = []
+    for i in range(len(corridor_lines) - 1):
+        corridor_polygons.append(Polygon([*corridor_lines[i].coords, *corridor_lines[i + 1].coords[::-1]]))
+
+    # Clip the input polygons into corridors
+    def split_into_corridors(polygon, corridor_polygons):
+        split_polygons = []
+        for corridor in corridor_polygons:
+            clipped = polygon.intersection(corridor)
+            if not clipped.is_empty:
+                split_polygons.append(clipped)
+        return split_polygons
+    
+
+    # Split polygons into corridors
+    resulting_corridors = []
+    for poly in gdf.geometry:
+        resulting_corridors.extend(split_into_corridors(poly, corridor_polygons))
+
+    # Create a GeoDataFrame of the resulting corridor polygons
+    result_gdf = gpd.GeoDataFrame(geometry=resulting_corridors, crs=gdf.crs)

@@ -120,6 +120,13 @@ def process(launch_points_df, scan_areas_df) -> pd.DataFrame:
 
     progress_bar.progress(1, text="Slicing scan areas")
 
+
+
+
+
+
+    
+
     progress_bar.progress(100, text="Finalizing")
     time.sleep(1.0)
     progress_bar.empty()
