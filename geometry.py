@@ -125,7 +125,10 @@ import pyproj
 
 
 def cleanup_names(df):
-    # Ensure all features have a 'name' property
+    """
+    Ensure all features have a 'name' property
+    """
+
     if 'name' not in df.columns:
         df['name'] = None  # Create the column if it doesn't exist
 
@@ -152,6 +155,10 @@ def stgeodataframe(df):
 
 
 def compute_bounding_circle(polygons):
+    """
+    Given polygons, compute the circle that bounds all of them
+    """
+
     minx, miny, maxx, maxy = polygons.total_bounds
     centerx, centery = ((minx+maxx)/2, (miny+maxy)/2)
     radius = np.sqrt(((minx-maxx)/2)**2+((miny-maxy)/2)**2)
@@ -159,6 +166,10 @@ def compute_bounding_circle(polygons):
 
 
 def project_df(transformer: pyproj.Transformer, gdf):
+    """
+    Project a GeoDataFrame to a new coordinate reference system
+    """
+
     if gdf is None:
         return None
     result_gdf = gdf.copy()
@@ -169,9 +180,12 @@ def project_df(transformer: pyproj.Transformer, gdf):
     return result_gdf
 
 
-def generate_corridors(polygons, corridor_direction, corridor_width):
+def generate_corridors(scan_area, corridor_direction, corridor_width):
+    """
+    Generate corridors (Polygons) along the specified direction
+    """
 
-    radius, centerx, centery = compute_bounding_circle(polygons)
+    radius, centerx, centery = compute_bounding_circle(scan_area)
 
     # Convert direction to radians
     direction_rad = np.deg2rad(-corridor_direction)
@@ -197,30 +211,33 @@ def generate_corridors(polygons, corridor_direction, corridor_width):
         )
         corridor_lines.append(parallel_line)
 
-    # Convert corridor lines into polygons (corridors)
+    # Convert corridor lines into scan_area (corridors)
     corridor_polygons = []
     for i in range(len(corridor_lines) - 1):
         corridor_polygons.append(
             Polygon([*corridor_lines[i].coords, *corridor_lines[i + 1].coords[::-1]]))
 
-    # Split polygons into corridors
+    # Split scan_area into corridors
     resulting_corridors = []
-    for poly in polygons.geometry:
+    for poly in scan_area.geometry:
         for corridor in corridor_polygons:
             clipped = poly.intersection(corridor)
             if not clipped.is_empty:
                 resulting_corridors.append(clipped)
 
-    # Create a GeoDataFrame of the resulting corridor polygons
+    # Create a GeoDataFrame of the resulting corridor scan_area
     result_gdf = gpd.GeoDataFrame(
-        geometry=resulting_corridors, crs=polygons.crs)
+        geometry=resulting_corridors, crs=scan_area.crs)
 
     return result_gdf
 
 
-def generate_passes(polygons, passes_direction, passes_spacing):
+def generate_passes(scan_area, passes_direction, passes_spacing):
+    """
+    Generate passes (Lines) along the specified direction
+    """
 
-    radius, centerx, centery = compute_bounding_circle(polygons)
+    radius, centerx, centery = compute_bounding_circle(scan_area)
 
     # Convert direction to radians
     direction_rad = np.deg2rad(-passes_direction)
@@ -246,24 +263,49 @@ def generate_passes(polygons, passes_direction, passes_spacing):
         )
         passe_lines.append(parallel_line)
 
-    # Split polygons into passes
+    # Split scan_area into passes
     resulting_passes = []
-    for poly in polygons.geometry:
+    for poly in scan_area.geometry:
         for passe in passe_lines:
             clipped = poly.intersection(passe)
             if not clipped.is_empty:
                 resulting_passes.append(clipped)
 
-    # Create a GeoDataFrame of the resulting passe polygons
+    # Create a GeoDataFrame of the resulting pass
     result_gdf = gpd.GeoDataFrame(
-        geometry=resulting_passes, crs=polygons.crs)
+        geometry=resulting_passes, crs=scan_area.crs)
 
     return result_gdf
 
 
-def generate_next_lawnmower(polygons, remaining_corridors, corridor_direction, passes, passes_crosshatch):
-    radius, centerx, centery = compute_bounding_circle(polygons)
+def move_mask_square(mask_square_template, direction_rad, centerx, centery, radius, iteration_spacing, index):
+    """
+    Given the mask square template (A square aligned with corridors, covering the whole areas),
+    Move the mask square to the specified index of the iteration, covering more and more of the corridor
+    """
+    mask_square = rotate(
+        translate(
+            mask_square_template,
+            xoff=2*radius - iteration_spacing*index,
+            yoff=0
+        ),
+        direction_rad,
+        origin=(centerx, centery),
+        use_radians=True
+    )
+    return mask_square
 
+
+def compute_mission_duration(remaining_corridors, passes, passes_crosshatch, mask_square):
+    pass
+
+
+def generate_next_lawnmower(scan_areas, launch_points, remaining_corridors, corridor_direction, passes, passes_crosshatch, iteration_spacing):
+    """
+    Generate the next lawnmower pattern
+    """
+
+    radius, centerx, centery = compute_bounding_circle(scan_areas)
     direction_rad = np.deg2rad(180+90-corridor_direction)
     mask_square_template = Polygon([
         (centerx+radius, centery+radius),
@@ -272,14 +314,13 @@ def generate_next_lawnmower(polygons, remaining_corridors, corridor_direction, p
         (centerx-radius, centery+radius),
     ])
 
-    mask_square = rotate(translate(mask_square_template, xoff=2*radius, yoff=0), direction_rad,
-                         origin=(centerx, centery), use_radians=True)
+    mask_square = move_mask_square(
+        mask_square_template, direction_rad, centerx, centery, radius, iteration_spacing, 35)
 
-    result_gdf = gpd.GeoDataFrame(
-        geometry=[mask_square], crs=polygons.crs)
+    result_gdf = gpd.GeoDataFrame(geometry=[mask_square], crs=scan_areas.crs)
 
     return result_gdf
 
 
-def generate_next_mission(polygons, remaining_corridors, corridor_direction, passes, passes_crosshatch):
-    return generate_next_lawnmower(polygons, remaining_corridors, corridor_direction, passes, passes_crosshatch)
+def generate_next_mission(scan_areas, remaining_corridors, corridor_direction, passes, passes_crosshatch):
+    return generate_next_lawnmower(scan_areas, remaining_corridors, corridor_direction, passes, passes_crosshatch)

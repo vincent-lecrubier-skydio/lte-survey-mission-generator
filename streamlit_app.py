@@ -94,7 +94,7 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
     process_progress_bar.progress(50, text="Generating optimal missions")
 
     lawnmowers = generate_next_lawnmower(
-        scan_areas, corridors, corridor_direction, passes, passes_crosshatch)
+        scan_areas, launch_points, corridors, corridor_direction, passes, passes_crosshatch, pass_spacing)
 
     process_progress_bar.progress(100, text="Finalizing")
     time.sleep(1.0)
@@ -239,7 +239,13 @@ st.markdown("## 3. Compute missions")
 #     st.stop()
 
 
-(scan_areas, corridors, passes, passes_crosshatch, lawnmowers) = process(
+(
+    scan_areas,
+    corridors,
+    passes,
+    passes_crosshatch,
+    lawnmowers
+) = process(
     geojson_file,
     launch_points_df,
     scan_areas_df,
