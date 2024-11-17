@@ -128,7 +128,7 @@ with st.expander("Mission Planning Parameters"):
         """
         We generate a lawnmower pattern to scan the area with a given spacing between passes.
         We slice the scan area into separate corridors of specified width, along the first pass axis.
-        For each corridor, we then slice it again into separate slices across the first pass axis. 
+        For each corridor, we then slice it again into separate slices across the first pass axis.
         We compute the size of each slice such that each mission is as long as possible, but no more than target duration.
         We then fly the drone at specific speed and altitude along these passes.
         """)
