@@ -1,7 +1,7 @@
 import streamlit as st
 import json
 from shapely.geometry import shape, LineString, mapping, Polygon
-from shapely.affinity import translate
+from shapely.affinity import translate, rotate
 import geopandas as gpd
 from shapely.ops import linemerge
 import numpy as np
@@ -16,113 +16,112 @@ import io
 import zipfile
 
 import numpy as np
-from shapely.geometry import LineString, Polygon
 from shapely.ops import transform, linemerge
 import pyproj
 
 
-def generate_lawnmower_pattern(polygon, spacing, passes):
-    bounds = polygon.bounds
-    minx, miny, maxx, maxy = bounds
+# def generate_lawnmower_pattern(polygon, spacing, passes):
+#     bounds = polygon.bounds
+#     minx, miny, maxx, maxy = bounds
 
-    # Create a local projection centered on the polygon
-    local_utm = pyproj.Proj(proj='utm', zone=int(
-        (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
-    wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
-    project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm).transform
-    project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84).transform
+#     # Create a local projection centered on the polygon
+#     local_utm = pyproj.Proj(proj='utm', zone=int(
+#         (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
+#     wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
+#     project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm).transform
+#     project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84).transform
 
-    # Convert the polygon to the local UTM coordinates
-    utm_polygon = transform(project_to_utm, polygon)
+#     # Convert the polygon to the local UTM coordinates
+#     utm_polygon = transform(project_to_utm, polygon)
 
-    # Get the bounds in the local UTM coordinates
-    minx, miny, maxx, maxy = utm_polygon.bounds
+#     # Get the bounds in the local UTM coordinates
+#     minx, miny, maxx, maxy = utm_polygon.bounds
 
-    lines = []
+#     lines = []
 
-    if "North-South" in passes:
-        x_coords = np.arange(minx, maxx, spacing)
-        for i, x in enumerate(x_coords):
-            if i % 2 == 0:
-                lines.append(LineString([(x, miny), (x, maxy)]))
-            else:
-                lines.append(LineString([(x, maxy), (x, miny)]))
+#     if "North-South" in passes:
+#         x_coords = np.arange(minx, maxx, spacing)
+#         for i, x in enumerate(x_coords):
+#             if i % 2 == 0:
+#                 lines.append(LineString([(x, miny), (x, maxy)]))
+#             else:
+#                 lines.append(LineString([(x, maxy), (x, miny)]))
 
-    if "East-West" in passes:
-        y_coords = np.arange(miny, maxy, spacing)
-        for i, y in enumerate(y_coords):
-            if i % 2 == 0:
-                lines.append(LineString([(minx, y), (maxx, y)]))
-            else:
-                lines.append(LineString([(maxx, y), (minx, y)]))
+#     if "East-West" in passes:
+#         y_coords = np.arange(miny, maxy, spacing)
+#         for i, y in enumerate(y_coords):
+#             if i % 2 == 0:
+#                 lines.append(LineString([(minx, y), (maxx, y)]))
+#             else:
+#                 lines.append(LineString([(maxx, y), (minx, y)]))
 
-    lawnmower_lines = [line.intersection(utm_polygon) for line in lines]
-    lawnmower_lines = [
-        line for line in lawnmower_lines if not line.is_empty and line.geom_type == 'LineString']
+#     lawnmower_lines = [line.intersection(utm_polygon) for line in lines]
+#     lawnmower_lines = [
+#         line for line in lawnmower_lines if not line.is_empty and line.geom_type == 'LineString']
 
-    # Connect the lines
-    connected_lines = []
-    for i in range(len(lawnmower_lines) - 1):
-        connected_lines.append(lawnmower_lines[i])
-        start_point = lawnmower_lines[i].coords[-1]
-        end_point = lawnmower_lines[i + 1].coords[0]
-        connected_lines.append(LineString([start_point, end_point]))
-    if len(lawnmower_lines) > 1:
-        connected_lines.append(lawnmower_lines[-1])
+#     # Connect the lines
+#     connected_lines = []
+#     for i in range(len(lawnmower_lines) - 1):
+#         connected_lines.append(lawnmower_lines[i])
+#         start_point = lawnmower_lines[i].coords[-1]
+#         end_point = lawnmower_lines[i + 1].coords[0]
+#         connected_lines.append(LineString([start_point, end_point]))
+#     if len(lawnmower_lines) > 1:
+#         connected_lines.append(lawnmower_lines[-1])
 
-    merged_line = linemerge(connected_lines)
+#     merged_line = linemerge(connected_lines)
 
-    # Convert the merged line back to WGS84 coordinates
-    wgs84_merged_line = transform(project_to_wgs84, merged_line)
+#     # Convert the merged line back to WGS84 coordinates
+#     wgs84_merged_line = transform(project_to_wgs84, merged_line)
 
-    if wgs84_merged_line.geom_type == 'MultiLineString' or wgs84_merged_line.geom_type == 'GeometryCollection':
-        coords = [
-            coord for line in wgs84_merged_line.geoms for coord in line.coords]
+#     if wgs84_merged_line.geom_type == 'MultiLineString' or wgs84_merged_line.geom_type == 'GeometryCollection':
+#         coords = [
+#             coord for line in wgs84_merged_line.geoms for coord in line.coords]
 
-    else:
-        coords = wgs84_merged_line.coords
+#     else:
+#         coords = wgs84_merged_line.coords
 
-    for point in coords:
-        point = list(point)
+#     for point in coords:
+#         point = list(point)
 
-    return LineString(coords)
+#     return LineString(coords)
 
 
-def split_polygon_into_squares(polygon, size):
-    bounds = polygon.bounds
-    minx, miny, maxx, maxy = bounds
+# def split_polygon_into_squares(polygon, size):
+#     bounds = polygon.bounds
+#     minx, miny, maxx, maxy = bounds
 
-    # Create a local projection centered on the polygon
-    local_utm = pyproj.Proj(proj='utm', zone=int(
-        (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
-    wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
-    project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm).transform
-    project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84).transform
+#     # Create a local projection centered on the polygon
+#     local_utm = pyproj.Proj(proj='utm', zone=int(
+#         (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
+#     wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
+#     project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm).transform
+#     project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84).transform
 
-    # Convert the polygon to the local UTM coordinates
-    utm_polygon = transform(project_to_utm, polygon)
+#     # Convert the polygon to the local UTM coordinates
+#     utm_polygon = transform(project_to_utm, polygon)
 
-    # Get the bounds in the local UTM coordinates
-    minx, miny, maxx, maxy = utm_polygon.bounds
+#     # Get the bounds in the local UTM coordinates
+#     minx, miny, maxx, maxy = utm_polygon.bounds
 
-    squares = []
-    x_coords = np.arange(minx, maxx, size)
-    y_coords = np.arange(miny, maxy, size)
+#     squares = []
+#     x_coords = np.arange(minx, maxx, size)
+#     y_coords = np.arange(miny, maxy, size)
 
-    for x in x_coords:
-        for y in y_coords:
-            square = Polygon([
-                (x, y),
-                (x + size, y),
-                (x + size, y + size),
-                (x, y + size),
-                (x, y)
-            ])
-            intersection = utm_polygon.intersection(square)
-            if not intersection.is_empty:
-                squares.append(transform(project_to_wgs84, intersection))
+#     for x in x_coords:
+#         for y in y_coords:
+#             square = Polygon([
+#                 (x, y),
+#                 (x + size, y),
+#                 (x + size, y + size),
+#                 (x, y + size),
+#                 (x, y)
+#             ])
+#             intersection = utm_polygon.intersection(square)
+#             if not intersection.is_empty:
+#                 squares.append(transform(project_to_wgs84, intersection))
 
-    return squares
+#     return squares
 
 
 def cleanup_names(df):
@@ -160,6 +159,8 @@ def compute_bounding_circle(polygons):
 
 
 def project_df(transformer: pyproj.Transformer, gdf):
+    if gdf is None:
+        return None
     result_gdf = gdf.copy()
     result_gdf["geometry"] = result_gdf["geometry"].apply(
         lambda geom: transform(transformer.transform, geom))
@@ -173,7 +174,7 @@ def generate_corridors(polygons, corridor_direction, corridor_width):
     radius, centerx, centery = compute_bounding_circle(polygons)
 
     # Convert direction to radians
-    direction_rad = np.deg2rad(90+45-corridor_direction)
+    direction_rad = np.deg2rad(-corridor_direction)
 
     # Define a base line along the specified direction
     base_line = LineString([
@@ -189,11 +190,10 @@ def generate_corridors(polygons, corridor_direction, corridor_width):
     # Generate lines on both sides of corridors
     corridor_lines = []
     for i in range(-half_number_of_corridors, half_number_of_corridors+1):
-        st.text(i)
         parallel_line = translate(
             base_line,
-            xoff=i*corridor_width+math.cos(direction_rad),
-            yoff=i*corridor_width+math.sin(direction_rad)
+            xoff=i*corridor_width*math.cos(direction_rad),
+            yoff=i*corridor_width*math.sin(direction_rad)
         )
         corridor_lines.append(parallel_line)
 
@@ -216,3 +216,70 @@ def generate_corridors(polygons, corridor_direction, corridor_width):
         geometry=resulting_corridors, crs=polygons.crs)
 
     return result_gdf
+
+
+def generate_passes(polygons, passes_direction, passes_spacing):
+
+    radius, centerx, centery = compute_bounding_circle(polygons)
+
+    # Convert direction to radians
+    direction_rad = np.deg2rad(-passes_direction)
+
+    # Define a base line along the specified direction
+    base_line = LineString([
+        (centerx+radius * math.cos(math.pi / 2 + direction_rad),
+         centery+radius * math.sin(math.pi / 2 + direction_rad)),
+        (centerx-radius * math.cos(math.pi / 2 + direction_rad),
+         centery-radius * math.sin(math.pi / 2 + direction_rad))
+    ])
+
+    # Number of passes
+    half_number_of_passes = math.ceil(radius / passes_spacing)
+
+    # Generate lines on both sides of passes
+    passe_lines = []
+    for i in range(-half_number_of_passes, half_number_of_passes+2):
+        parallel_line = translate(
+            base_line,
+            xoff=(i-0.5)*passes_spacing*math.cos(direction_rad),
+            yoff=(i-0.5)*passes_spacing*math.sin(direction_rad)
+        )
+        passe_lines.append(parallel_line)
+
+    # Split polygons into passes
+    resulting_passes = []
+    for poly in polygons.geometry:
+        for passe in passe_lines:
+            clipped = poly.intersection(passe)
+            if not clipped.is_empty:
+                resulting_passes.append(clipped)
+
+    # Create a GeoDataFrame of the resulting passe polygons
+    result_gdf = gpd.GeoDataFrame(
+        geometry=resulting_passes, crs=polygons.crs)
+
+    return result_gdf
+
+
+def generate_next_lawnmower(polygons, remaining_corridors, corridor_direction, passes, passes_crosshatch):
+    radius, centerx, centery = compute_bounding_circle(polygons)
+
+    direction_rad = np.deg2rad(180+90-corridor_direction)
+    mask_square_template = Polygon([
+        (centerx+radius, centery+radius),
+        (centerx+radius, centery-radius),
+        (centerx-radius, centery-radius),
+        (centerx-radius, centery+radius),
+    ])
+
+    mask_square = rotate(translate(mask_square_template, xoff=2*radius, yoff=0), direction_rad,
+                         origin=(centerx, centery), use_radians=True)
+
+    result_gdf = gpd.GeoDataFrame(
+        geometry=[mask_square], crs=polygons.crs)
+
+    return result_gdf
+
+
+def generate_next_mission(polygons, remaining_corridors, corridor_direction, passes, passes_crosshatch):
+    return generate_next_lawnmower(polygons, remaining_corridors, corridor_direction, passes, passes_crosshatch)

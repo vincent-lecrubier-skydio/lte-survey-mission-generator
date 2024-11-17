@@ -11,7 +11,7 @@ from shapely.geometry import Point
 from shapely.ops import transform
 import pyproj
 
-from geometry import project_df, cleanup_names, generate_corridors, stgeodataframe
+from geometry import generate_next_lawnmower, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
 
 
 @st.cache_data
@@ -57,8 +57,8 @@ def preprocess(geojson_file) -> pd.DataFrame:
     return (center_coords, launch_points_df, scan_areas_df)
 
 
-@st.cache_data
-def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction, corridor_width) -> pd.DataFrame:
+# @st.cache_data
+def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch) -> pd.DataFrame:
     process_progress_bar = st.progress(0, text="Computing projections")
 
     # Create a local projection centered on the polygon
@@ -75,16 +75,38 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
     # Apply the transformation to scan areas
     scan_areas = project_df(project_to_utm, _scan_areas_df)
 
-    process_progress_bar.progress(1, text="Generating corridors")
+    process_progress_bar.progress(10, text="Generating corridors")
 
     corridors = generate_corridors(
         scan_areas, corridor_direction, corridor_width)
+
+    process_progress_bar.progress(20, text="Generating passes")
+
+    passes = generate_passes(
+        scan_areas, pass_direction, pass_spacing)
+    if crosshatch:
+        # Add crosshatch perpendicular passes
+        passes_crosshatch = generate_passes(
+            scan_areas, pass_direction + 90, pass_spacing)
+    else:
+        passes_crosshatch = None
+
+    process_progress_bar.progress(50, text="Generating optimal missions")
+
+    lawnmowers = generate_next_lawnmower(
+        scan_areas, corridors, corridor_direction, passes, passes_crosshatch)
 
     process_progress_bar.progress(100, text="Finalizing")
     time.sleep(1.0)
     process_progress_bar.empty()
 
-    return (project_df(project_to_wgs84, scan_areas), project_df(project_to_wgs84, corridors))
+    return (
+        project_df(project_to_wgs84, scan_areas),
+        project_df(project_to_wgs84, corridors),
+        project_df(project_to_wgs84, passes),
+        project_df(project_to_wgs84, passes_crosshatch),
+        project_df(project_to_wgs84, lawnmowers)
+    )
 
 
 ###############################################################################
@@ -133,12 +155,6 @@ with st.expander("Mission Planning Parameters"):
         We then fly the drone at specific speed and altitude along these passes.
         """)
 
-    passes = st.multiselect(
-        "Which scan passes do you want to fly?",
-        ["North-South", "East-West"],
-        ["North-South"],
-    )
-
     mission_duration = st.number_input(
         "Target mission duration, in minutes:", min_value=0, value=20)
     st.markdown(
@@ -150,14 +166,24 @@ with st.expander("Mission Planning Parameters"):
         f"Width = {corridor_width:.0f}m = {corridor_width*3.28084:.0f}ft = {corridor_width*1.09361:.0f}yd = {corridor_width/1609:.2f} Miles = {corridor_width/1852:.2f} Nautical Miles")
 
     corridor_direction = st.number_input(
-        "Direction of mission corridors, in degrees (0=Est-West):", min_value=0, max_value=360, value=0)
+        "Direction of mission corridors, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=90)
     st.markdown(
-        f"Direction = {corridor_direction:.0f}deg")
+        f"Corridor Direction = {corridor_direction:.0f}deg")
 
-    spacing = st.number_input(
+    pass_spacing = st.number_input(
         "Spacing between passes in meters:", min_value=10, value=100)
     st.markdown(
-        f"Spacing = {spacing:.0f}m = {spacing*3.28084:.0f}ft = {spacing*1.09361:.0f}yd = {spacing/1609:.2f} Miles = {spacing/1852:.2f} Nautical Miles")
+        f"Spacing = {pass_spacing:.0f}m = {pass_spacing*3.28084:.0f}ft = {pass_spacing*1.09361:.0f}yd = {pass_spacing/1609:.2f} Miles = {pass_spacing/1852:.2f} Nautical Miles")
+
+    pass_direction = st.number_input(
+        "Direction of mission passes, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=0)
+    st.markdown(
+        f"Passes Direction = {pass_direction:.0f}deg")
+
+    pass_crosshatch = st.checkbox(
+        "Crosshatch passes", value=False)
+    st.markdown(
+        f"Crosshatch pass = {'Yes' if pass_crosshatch else 'No'}")
 
     speed = st.number_input(
         "Flight speed in meters per second:", min_value=0, value=16)
@@ -213,37 +239,47 @@ st.markdown("## 3. Compute missions")
 #     st.stop()
 
 
-(scan_areas, corridors) = process(
+(scan_areas, corridors, passes, passes_crosshatch, lawnmowers) = process(
     geojson_file,
     launch_points_df,
     scan_areas_df,
     corridor_direction,
-    corridor_width
+    corridor_width,
+    pass_direction,
+    pass_spacing,
+    pass_crosshatch
 )
 
 with st.expander("View map of missions", expanded=True):
     m = folium.Map(location=center_coords, zoom_start=12)
-    folium.GeoJson(
-        scan_areas,
-        style_function=lambda x: {"color": "#0000ff"}
-        # popup=GeoJsonPopup(
-        #     fields=["name"],
-        #     aliases=["Name:"],
-        #     localize=True,
-        #     labels=True,
-        #     style="background-color: yellow;",
-        # ),
-    ).add_to(m)
+    # folium.GeoJson(
+    #     scan_areas,
+    #     style_function=lambda x: {"color": "#0000ff", "weight": 3}
+    #     # popup=GeoJsonPopup(
+    #     #     fields=["name"],
+    #     #     aliases=["Name:"],
+    #     #     localize=True,
+    #     #     labels=True,
+    #     #     style="background-color: yellow;",
+    #     # ),
+    # ).add_to(m)
     folium.GeoJson(
         corridors,
-        style_function=lambda x: {"color": "#ff0000"}
-        # popup=GeoJsonPopup(
-        #     fields=["name"],
-        #     aliases=["Name:"],
-        #     localize=True,
-        #     labels=True,
-        #     style="background-color: yellow;",
-        # ),
+        style_function=lambda x: {"color": "#ff0000", "weight": 2}
+
+    ).add_to(m)
+    folium.GeoJson(
+        passes,
+        style_function=lambda x: {"color": "#00cc00", "weight": 1}
+    ).add_to(m)
+    if passes_crosshatch is not None:
+        folium.GeoJson(
+            passes_crosshatch,
+            style_function=lambda x: {"color": "#00aa00", "weight": 1}
+        ).add_to(m)
+    folium.GeoJson(
+        lawnmowers,
+        style_function=lambda x: {"color": "#ff00ff", "weight": 3}
     ).add_to(m)
     st_folium(m, width=700, height=500, return_on_hover=False)
 
