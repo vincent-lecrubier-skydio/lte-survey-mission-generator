@@ -1,6 +1,8 @@
 import streamlit as st
 import json
 from shapely.geometry import shape, LineString, mapping, Polygon
+from shapely.affinity import translate
+import geopandas as gpd
 from shapely.ops import linemerge
 import numpy as np
 import pyproj
@@ -150,43 +152,67 @@ def stgeodataframe(df):
     st.dataframe(dftodisplay)
 
 
-def generate_corridors(polygons,origin,direction,width ):
+def compute_bounding_circle(polygons):
+    minx, miny, maxx, maxy = polygons.total_bounds
+    centerx, centery = ((minx+maxx)/2, (miny+maxy)/2)
+    radius = np.sqrt(((minx-maxx)/2)**2+((miny-maxy)/2)**2)
+    return (radius, centerx, centery)
+
+
+def project_df(transformer: pyproj.Transformer, gdf):
+    result_gdf = gdf.copy()
+    result_gdf["geometry"] = result_gdf["geometry"].apply(
+        lambda geom: transform(transformer.transform, geom))
+    result_gdf.set_crs(transformer.target_crs,
+                       inplace=True, allow_override=True)
+    return result_gdf
+
+
+def generate_corridors(polygons, corridor_direction, corridor_width):
+
+    radius, centerx, centery = compute_bounding_circle(polygons)
 
     # Convert direction to radians
-    direction_rad = np.deg2rad(direction)
+    direction_rad = np.deg2rad(90+45-corridor_direction)
 
     # Define a base line along the specified direction
-    length = 1000000  # Arbitrary large length for the line
-    dx = length * np.cos(direction_rad)
-    dy = length * np.sin(direction_rad)
-    base_line = LineString([origin, (origin[0] + dx, origin[1] + dy)])
+    base_line = LineString([
+        (centerx+radius * math.cos(math.pi / 2 + direction_rad),
+         centery+radius * math.sin(math.pi / 2 + direction_rad)),
+        (centerx-radius * math.cos(math.pi / 2 + direction_rad),
+         centery-radius * math.sin(math.pi / 2 + direction_rad))
+    ])
 
-    # Generate parallel corridor lines
+    # Number of corridors
+    half_number_of_corridors = math.ceil(radius / corridor_width)
+
+    # Generate lines on both sides of corridors
     corridor_lines = []
-    for i in range(-50, 51):  # Generate lines on both sides of the origin
-        offset = i * width
-        parallel_line = translate(base_line, xoff=-dy * offset / length, yoff=dx * offset / length)
+    for i in range(-half_number_of_corridors, half_number_of_corridors+1):
+        st.text(i)
+        parallel_line = translate(
+            base_line,
+            xoff=i*corridor_width+math.cos(direction_rad),
+            yoff=i*corridor_width+math.sin(direction_rad)
+        )
         corridor_lines.append(parallel_line)
 
     # Convert corridor lines into polygons (corridors)
     corridor_polygons = []
     for i in range(len(corridor_lines) - 1):
-        corridor_polygons.append(Polygon([*corridor_lines[i].coords, *corridor_lines[i + 1].coords[::-1]]))
-
-    # Clip the input polygons into corridors
-    def split_into_corridors(polygon, corridor_polygons):
-        split_polygons = []
-        for corridor in corridor_polygons:
-            clipped = polygon.intersection(corridor)
-            if not clipped.is_empty:
-                split_polygons.append(clipped)
-        return split_polygons
-    
+        corridor_polygons.append(
+            Polygon([*corridor_lines[i].coords, *corridor_lines[i + 1].coords[::-1]]))
 
     # Split polygons into corridors
     resulting_corridors = []
-    for poly in gdf.geometry:
-        resulting_corridors.extend(split_into_corridors(poly, corridor_polygons))
+    for poly in polygons.geometry:
+        for corridor in corridor_polygons:
+            clipped = poly.intersection(corridor)
+            if not clipped.is_empty:
+                resulting_corridors.append(clipped)
 
     # Create a GeoDataFrame of the resulting corridor polygons
-    result_gdf = gpd.GeoDataFrame(geometry=resulting_corridors, crs=gdf.crs)
+    result_gdf = gpd.GeoDataFrame(
+        geometry=resulting_corridors, crs=polygons.crs)
+
+    return result_gdf
