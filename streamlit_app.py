@@ -1,3 +1,6 @@
+from typing import Union
+from shapely import LineString
+from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
@@ -10,8 +13,40 @@ from streamlit_folium import st_folium
 from shapely.geometry import Point
 from shapely.ops import transform
 import pyproj
+import colorsys
+import math
 
-from geometry import compute_oriented_slices, generate_next_lawnmower, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
+
+def generate_random_saturated_color(index):
+    # Generate a random hue (0-360 degrees)
+    hue = (index * 137) % 360  # A multiplier like 137 ensures a spread of hues
+    # Saturation and lightness are set for high saturation and medium brightness
+    saturation = 100  # Fully saturated
+    lightness = 50    # Medium lightness for vivid color
+    r, g, b = colorsys.hls_to_rgb(
+        hue / 360.0, lightness / 100.0, saturation / 100.0)
+    return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
+
+
+def compute_mission_duration(
+    mission_path: LineString,
+    altitude: float,
+    horizontal_speed_meters_per_second: float,
+    time_lost_per_waypoint_seconds=6.0,
+    ascent_speed_meters_per_second=8.0,
+    descent_speed_meters_per_second=6.0,
+) -> Union[float, None]:
+    """
+    Compute the duration of a mission given the speed and altitude.
+    """
+    if mission_path is None:
+        return None
+    duration_travel = mission_path.length / horizontal_speed_meters_per_second
+    duration_ascent = altitude / ascent_speed_meters_per_second
+    duration_descent = altitude / descent_speed_meters_per_second
+    duration_waypoints = len(mission_path.coords) * \
+        time_lost_per_waypoint_seconds
+    return duration_travel + duration_ascent + duration_descent + duration_waypoints
 
 
 @st.cache_data
@@ -56,9 +91,14 @@ def preprocess(geojson_file) -> pd.DataFrame:
 
     return (center_coords, launch_points_df, scan_areas_df)
 
-
 # @st.cache_data
-def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch) -> pd.DataFrame:
+
+
+def process(
+        geojson_file, _launch_points_df, _scan_areas_df,
+        corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch,
+        altitude, speed, max_mission_duration
+) -> pd.DataFrame:
     process_progress_bar = st.progress(0, text="Computing projections")
 
     # Create a local projection centered on the polygon
@@ -78,7 +118,7 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
     process_progress_bar.progress(10, text="Generating slices")
 
     iteration_spacing = pass_spacing
-    slices = compute_oriented_slices(
+    slices = generate_oriented_slices(
         scan_areas, corridor_direction, corridor_width, iteration_spacing)
 
     process_progress_bar.progress(20, text="Generating passes")
@@ -94,10 +134,83 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
 
     process_progress_bar.progress(50, text="Generating optimal missions")
 
-    lawnmowers = generate_next_lawnmower(
-        slices,
-        scan_areas,
-        launch_points, corridor_direction, corridor_width, passes, passes_crosshatch, pass_spacing)
+    start_slice = 0
+    end_slice = slices.shape[0]
+
+    missions_optim = []
+    current_start = start_slice
+
+    while current_start < end_slice:
+
+        process_progress_bar.progress(50+50*math.floor((current_start-start_slice)/(
+            end_slice-start_slice)), text="Generating optimal missions")
+
+        # Binary search to find the best range
+        low, high = current_start + 1, end_slice
+        best_end = None
+        best_reward = float('-inf')
+
+        while low <= high:
+            mid = (low + high) // 2
+
+            mission_path = compute_total_mission_path(
+                launch_points, slices, passes, passes_crosshatch, current_start, mid)
+            mission_duration = compute_mission_duration(
+                mission_path, altitude, speed)
+            reward = mid-current_start
+            st.text(f"{current_start}, {mid}: {mission_duration}")
+
+            if mission_duration is None:  # Invalid range, increase size
+                low = mid + 1
+            elif mission_duration > max_mission_duration:  # Range too large, decrease size
+                high = mid - 1
+            else:  # Valid range, optimize for maximum reward
+                if reward > best_reward:
+                    best_reward = reward
+                    best_end = mid
+                low = mid + 1  # Explore larger ranges
+
+        # If no valid range is found, terminate the loop
+        if best_end is None:
+            raise ValueError(
+                "No mission found for the given constraints, try making target duration larger")
+
+        # Finalize the missions
+        missions_optim.append((current_start, best_end,
+                               mission_path, mission_duration))
+        current_start = best_end  # Update start for the next range
+
+    # missions_optim = [
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 0, 20),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 20, 37),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 37, 92),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 92, 165),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 165, 200),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 200, 275),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 275, 342),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 342, 384),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 384, 427),
+    #     compute_total_mission_path(
+    #         launch_points, slices, passes, passes_crosshatch, 427, 560),
+    # ]
+
+    missions = gpd.GeoDataFrame({
+        'geometry': [mission_path for (start, end, mission_path, mission_duration) in missions],
+        'start': [start for (start, end, mission_path, mission_duration) in missions],
+        'end': [end for (start, end, mission_path, mission_duration) in missions],
+        'duration': [mission_duration for (start, end, mission_path, mission_duration) in missions],
+        'color': [generate_random_saturated_color(i) for i in range(len(missions))]
+    },
+        crs=scan_areas.crs)
 
     process_progress_bar.progress(100, text="Finalizing")
     time.sleep(1.0)
@@ -108,7 +221,7 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
         project_df(project_to_wgs84, launch_points),
         project_df(project_to_wgs84, passes),
         project_df(project_to_wgs84, passes_crosshatch),
-        project_df(project_to_wgs84, lawnmowers)
+        project_df(project_to_wgs84, missions)
     )
 
 
@@ -158,10 +271,10 @@ with st.expander("Mission Planning Parameters"):
         We then fly the drone at specific speed and altitude along these passes.
         """)
 
-    mission_duration = st.number_input(
-        "Target mission duration, in minutes:", min_value=0, value=20)
+    max_mission_duration = st.number_input(
+        "Target mission duration, in seconds:", min_value=0, value=20*60)
     st.markdown(
-        f"Mission duration = {mission_duration*60:.0f}s = {mission_duration:.0f}min{(mission_duration*60)%60:.0f}s")
+        f"Mission duration = {max_mission_duration:.0f}s = {max_mission_duration/60:.0f}min{max_mission_duration%60:.0f}s")
 
     corridor_width = st.number_input(
         "Width of mission corridors, in meters:", min_value=100, value=800)
@@ -247,7 +360,7 @@ st.markdown("## 3. Compute missions")
     launch_points,
     passes,
     passes_crosshatch,
-    lawnmowers
+    missions
 ) = process(
     geojson_file,
     launch_points_df,
@@ -256,14 +369,17 @@ st.markdown("## 3. Compute missions")
     corridor_width,
     pass_direction,
     pass_spacing,
-    pass_crosshatch
+    pass_crosshatch,
+    altitude,
+    speed,
+    max_mission_duration
 )
 
 with st.expander("View map of missions", expanded=True):
     m = folium.Map(location=center_coords, zoom_start=12)
     folium.GeoJson(
         scan_areas,
-        style_function=lambda x: {"color": "#0000ff", "weight": 3},
+        style_function=lambda x: {"color": "#000000", "weight": 3},
         popup=GeoJsonPopup(
             fields=["name"],
             aliases=["Name:"],
@@ -300,8 +416,9 @@ with st.expander("View map of missions", expanded=True):
         ).add_to(m)
 
     folium.GeoJson(
-        lawnmowers,
-        style_function=lambda x: {"color": "#ff00ff", "weight": 2},
+        missions,
+        style_function=lambda x: {
+            "color": x['properties']["color"], "weight": 2},
         # popup=GeoJsonPopup(
         #     fields=["name"],
         #     aliases=["Name:"],

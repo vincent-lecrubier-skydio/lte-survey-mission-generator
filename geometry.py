@@ -358,7 +358,7 @@ def generate_slices(rectangle, crs, corridor_width, slice_thickness):
     return result
 
 
-def compute_oriented_slices(polygons, direction, corridor_width, slice_thickness):
+def generate_oriented_slices(polygons, direction, corridor_width, slice_thickness):
     """
     Compute slices of all polygons in a GeoDataFrame oriented along a specified direction.
     """
@@ -571,9 +571,22 @@ def reverse_geometry(geometry):
     return geometry  # Return as-is for other geometry types
 
 
-def compute_total_mission_path(launch_points: gpd.GeoDataFrame, slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int):
+def compute_total_mission_path(
+    launch_points: gpd.GeoDataFrame,
+    slices: gpd.GeoDataFrame,
+    passes: gpd.GeoDataFrame,
+    passes_crosshatch: gpd.GeoDataFrame,
+    min_slice_index: int,
+    max_slice_index: int
+) -> LineString:
+    if min_slice_index >= max_slice_index:
+        return None
+
     (mission_passes, mission_crosshatch_passes) = compute_mission_passes(
         slices, passes, passes_crosshatch, min_slice_index, max_slice_index)
+
+    if mission_passes.empty and (mission_crosshatch_passes is None or mission_crosshatch_passes.empty):
+        return None
 
     # Invert every other line to create lawnmower patterns
     mission_passes_left = gpd.GeoSeries([
@@ -628,16 +641,3 @@ def compute_total_mission_path(launch_points: gpd.GeoDataFrame, slices: gpd.GeoD
     all_coords.append(launch_point.geometry.coords[0])
     mission_path = LineString(all_coords)
     return mission_path
-
-
-def generate_next_lawnmower(slices_gdf, scan_areas, launch_points, corridor_direction, corridor_width, passes, passes_crosshatch, iteration_spacing):
-    """
-    Generate the next lawnmower pattern
-    """
-
-    result = compute_total_mission_path(
-        launch_points, slices_gdf, passes, passes_crosshatch, 37, 165)
-
-    result_gdf = gpd.GeoDataFrame({'geometry': [result]}, crs=scan_areas.crs)
-
-    return result_gdf
