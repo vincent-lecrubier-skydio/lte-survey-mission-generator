@@ -36,6 +36,9 @@ def reverse_geocode(lat, lon):
     if response.status_code == 200:
         data = response.json()
         if data['features']:
+            if 'context' in data['features'][0]['properties']:
+                # Extract the city and country
+                return data['features'][0]['properties']['context']['address']['name'] + ", " + data['features'][0]['properties']['context']['place']['name']
             # Extract the full address
             return data['features'][0]['properties']['name']
         else:
@@ -210,7 +213,7 @@ def process(
         # Finalize the missions
         missions_optim.append((current_start, best_end,
                                best_mission_path, best_mission_duration))
-        current_start = best_end  # Update start for the next range
+        current_start = best_end + 1  # Update start for the next range
 
     missions = gpd.GeoDataFrame({
         'geometry': [mission_path for (start, end, mission_path, mission_duration) in missions_optim],
