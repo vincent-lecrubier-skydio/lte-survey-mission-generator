@@ -1,4 +1,5 @@
-from shapely import MultiPolygon, Point
+from typing import Tuple
+from shapely import MultiLineString, MultiPolygon, Point
 import streamlit as st
 import json
 from shapely.geometry import shape, LineString, mapping, Polygon
@@ -340,8 +341,6 @@ def generate_slices(rectangle, crs, corridor_width, slice_thickness):
         # Calculate coordinates for the polygon
         slice_min_x = minx + slice_index_within_corridor * slice_thickness
         slice_max_x = min(slice_min_x + slice_thickness, maxx)
-        # corridor_min_y = miny + corridor_index * corridor_width
-        # corridor_max_y = min(corridor_min_y + corridor_width, maxy)
         corridor_min_y = maxy - corridor_index * corridor_width
         corridor_max_y = max(corridor_min_y - corridor_width, miny)
 
@@ -431,7 +430,7 @@ def compute_oriented_bounding_box(polygons, direction):
     return oriented_bbox
 
 
-def compute_mission_passes(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int):
+def compute_mission_passes(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int) -> Tuple[gpd.GeoSeries, gpd.GeoSeries]:
     """
     Compute the mission path based on the slices and passes.
 
@@ -449,26 +448,20 @@ def compute_mission_passes(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, p
     merged_slices = slices_to_merge.unary_union
 
     # Compute the mission path by intersecting the combined slices with the passes
-    mission_passes = merged_slices.intersection(passes.unary_union)
-    mission_passes_crosshatch = merged_slices.intersection(
-        passes_crosshatch.unary_union) if passes_crosshatch is not None else None
+    mission_passes = passes.intersection(merged_slices)
+    mission_passes = mission_passes[mission_passes.notnull(
+    ) & ~mission_passes.is_empty]
 
-    # Combine the resulting geometries
-    mission_lines = []
-    for geom in [mission_passes, mission_passes_crosshatch]:
-        if geom is None:
-            continue
-        if geom.is_empty:
-            continue
-        if geom.geom_type == "LineString":
-            mission_lines.append(geom)
-        elif geom.geom_type == "MultiLineString":
-            mission_lines.extend(geom.geoms)
+    # Compute the crosshatch passes by intersecting the combined slices with the crosshatch passes
+    if passes_crosshatch is not None and not passes_crosshatch.empty:
+        mission_crosshatch_passes = passes_crosshatch.intersection(
+            merged_slices)
+        mission_crosshatch_passes = mission_crosshatch_passes[mission_crosshatch_passes.notnull(
+        ) & ~mission_crosshatch_passes.is_empty]
+    else:
+        mission_crosshatch_passes = None
 
-    # Create a GeoDataFrame from the resulting lines
-    mission_path_df = gpd.GeoDataFrame(geometry=mission_lines, crs=slices.crs)
-
-    return mission_path_df
+    return (mission_passes, mission_crosshatch_passes)
 
 
 def compute_closest_launch_point(launch_points: gpd.GeoDataFrame, mission_start, mission_end):
@@ -489,19 +482,64 @@ def compute_closest_launch_point(launch_points: gpd.GeoDataFrame, mission_start,
     return closest_launch_point
 
 
+def get_start_end_points(gdf):
+    # Get the geometry of the first row
+    first_geom = gdf.iloc[0]
+    # Get the geometry of the last row
+    last_geom = gdf.iloc[-1]
+
+    # Get the starting point of the first geometry
+    if first_geom.geom_type == 'LineString':
+        start_point = Point(first_geom.coords[0])
+    elif first_geom.geom_type == 'MultiLineString':
+        start_point = Point(first_geom.geoms[0].coords[0])
+
+    # Get the ending point of the last geometry
+    if last_geom.geom_type == 'LineString':
+        end_point = Point(last_geom.coords[-1])
+    elif last_geom.geom_type == 'MultiLineString':
+        end_point = Point(last_geom.geoms[-1].coords[-1])
+
+    return start_point, end_point
+
+# Function to reverse the geometry
+
+
+def reverse_geometry(geometry):
+    if isinstance(geometry, LineString):
+        # Reverse the coordinates of a LineString
+        return LineString(geometry.coords[::-1])
+    elif isinstance(geometry, MultiLineString):
+        # Reverse the coordinates of each LineString in a MultiLineString
+        return MultiLineString([LineString(line.coords[::-1]) for line in geometry.geoms][::-1])
+    return geometry  # Return as-is for other geometry types
+
+
 def compute_total_mission_path(launch_points: gpd.GeoDataFrame, slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int):
-    mission_passes = compute_mission_passes(
+    (mission_passes, mission_crosshatch_passes) = compute_mission_passes(
         slices, passes, passes_crosshatch, min_slice_index, max_slice_index)
 
-    # Invert every other line to create a lawnmower pattern
-    mission_passes['geometry'] = mission_passes.apply(
-        lambda row: LineString(
-            row.geometry.coords[::-1]) if row.name % 2 != 0 else row.geometry,
-        axis=1
-    )
+    # Invert every other line to create lawnmower patterns
+    mission_passes_left = gpd.GeoSeries([
+        reverse_geometry(geom) if geom and idx % 2 == 0 else geom
+        for idx, geom in enumerate(mission_passes)
+    ])
+    mission_passes_right = gpd.GeoSeries([
+        reverse_geometry(geom) if geom and idx % 2 == 1 else geom
+        for idx, geom in enumerate(mission_passes)
+    ])
+    if mission_crosshatch_passes is not None:
+        mission_crosshatch_passes_left = gpd.GeoSeries([
+            reverse_geometry(geom) if geom and idx % 2 == 0 else geom
+            for idx, geom in enumerate(mission_crosshatch_passes)
+        ])
 
-    mission_start = Point(mission_passes.iloc[0].geometry.coords[0])
-    mission_end = Point(mission_passes.iloc[-1].geometry.coords[-1])
+        mission_crosshatch_passes_right = gpd.GeoSeries([
+            reverse_geometry(geom) if geom and idx % 2 == 1 else geom
+            for idx, geom in enumerate(mission_crosshatch_passes)
+        ])
+
+    (mission_start, mission_end) = get_start_end_points(mission_passes)
 
     closest_launch_point = compute_closest_launch_point(
         launch_points, mission_start, mission_end)
@@ -513,11 +551,11 @@ def compute_total_mission_path(launch_points: gpd.GeoDataFrame, slices: gpd.GeoD
     # And then merging the segments
     all_coords = []
     all_coords.append(closest_launch_point.geometry.coords[0])
-    for mission_pass in mission_passes.itertuples():
-        if mission_pass.geometry.geom_type == "LineString":
-            all_coords.extend(mission_pass.geometry.coords)
-        elif mission_pass.geometry.geom_type == "MultiLineString":
-            for line in mission_pass.geometry.geoms:
+    for idx, geometry in mission_passes.items():
+        if geometry.geom_type == "LineString":
+            all_coords.extend(geometry.coords)
+        elif geometry.geom_type == "MultiLineString":
+            for line in geometry.geoms:
                 all_coords.extend(line.coords)
         else:
             raise ValueError("Invalid geometry type in mission passes.")
@@ -532,29 +570,8 @@ def generate_next_lawnmower(slices_gdf, scan_areas, launch_points, corridor_dire
     Generate the next lawnmower pattern
     """
 
-    # radius, centerx, centery = compute_bounding_circle(scan_areas)
-    # direction_rad = np.deg2rad(180+90-corridor_direction)
-    # mask_square_template = Polygon([
-    #     (centerx+radius, centery+radius),
-    #     (centerx+radius, centery-radius),
-    #     (centerx-radius, centery-radius),
-    #     (centerx-radius, centery+radius),
-    # ])
-
-    # result = move_mask_square(
-    #     mask_square_template, direction_rad, centerx, centery, radius, iteration_spacing, 35)
-
-    # result = compute_oriented_bounding_box(scan_areas, corridor_direction)
-    # result_gdf = gpd.GeoDataFrame(geometry=[result], crs=scan_areas.crs)
-
-    # slices_gdf = compute_oriented_slices(
-    #     scan_areas, corridor_direction, corridor_width, iteration_spacing)
-
-    # result_gdf = compute_mission_passes(
-    #     slices_gdf, passes, passes_crosshatch, 87, 165)
-
     result = compute_total_mission_path(
-        launch_points, slices_gdf, passes, passes_crosshatch, 87, 165)
+        launch_points, slices_gdf, passes, passes_crosshatch, 37, 165)
 
     result_gdf = gpd.GeoDataFrame({'geometry': [result]}, crs=scan_areas.crs)
 
