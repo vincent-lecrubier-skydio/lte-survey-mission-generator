@@ -1,7 +1,10 @@
+import asyncio
 from datetime import datetime
+import io
 import json
 from typing import Union
 import uuid
+import httpx
 from shapely import LineString
 from shapely.geometry import mapping
 from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
@@ -18,6 +21,7 @@ import altair as alt
 import pyproj
 import colorsys
 import math
+import zipfile
 import warnings
 import requests
 
@@ -82,6 +86,33 @@ def gdfs_to_json(*gdfs):
     return geojson_str
 
 
+def simplestyle_style_function(feature):
+    """
+    Style function for GeoJSON Simplestyle properties.
+    Parameters:
+        - feature: A single GeoJSON feature.
+    Returns:
+        - A dictionary with style attributes for Folium.
+    """
+    # Extract properties
+    properties = feature.get('properties', {})
+
+    # Simplestyle properties
+    stroke = properties.get('stroke', '#3388ff')  # Default blue
+    stroke_width = properties.get('stroke-width', 2)
+    stroke_opacity = properties.get('stroke-opacity', 1.0)
+    fill = properties.get('fill', '#3388ff')  # Default blue
+    fill_opacity = properties.get('fill-opacity', 0.2)
+
+    return {
+        'color': stroke,
+        'weight': stroke_width,
+        'opacity': stroke_opacity,
+        'fillColor': fill,
+        'fillOpacity': fill_opacity,
+    }
+
+
 def compute_mission_duration(
     mission_path: LineString,
     altitude: float,
@@ -103,11 +134,11 @@ def compute_mission_duration(
     return duration_travel + duration_ascent + duration_descent + duration_waypoints
 
 
-def generate_mission(linestring, index, altitude, name_template, rtx_height, rtx_speed, rtx_wait):
+def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
+    linestring = row.geometry
     with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
         mission_proto = json.load(mission_proto_file)
-        mission_proto["displayName"] = name_template.format(
-            index=index, date=datetime.now().isoformat())
+        mission_proto["displayName"] = row.get("name")
         mission_proto["templateUuid"] = str(uuid.uuid4())
         mission_proto["rtxSettings"]["minimumHeight"] = rtx_height
         mission_proto["rtxSettings"]["speed"] = rtx_speed
@@ -338,7 +369,7 @@ def process(
         # If no valid range is found, terminate the loop
         if best_end is None:
             raise ValueError(
-                "No mission found for the given constraints, try making target duration larger")
+                "No mission found for the given constraints, try making the Mission target duration longer, or add launch points, or make the scan area smaller")
 
         # Finalize the missions
         missions_optim.append((
@@ -405,6 +436,7 @@ with st.expander("View map of scan areas and launch points"):
     m = folium.Map(location=center_coords, zoom_start=12)
     folium.GeoJson(
         pd.concat([launch_points_df, scan_areas_df]),
+        style_function=simplestyle_style_function,
         popup=GeoJsonPopup(
             fields=["name"],
             aliases=["Name"],
@@ -489,15 +521,15 @@ with st.expander("Return Settings"):
     st.markdown(
         f"Wait Before Return on Lost Connection = {rtx_wait:.0f}s = {rtx_wait/60:.0f}min{rtx_wait%60:.0f}s")
 
-with st.expander("Cost Estimation Parameters"):
-    cost_fixed = st.number_input(
-        "Fixed base cost for the whole program:", min_value=0, value=5000)
+# with st.expander("Cost Estimation Parameters"):
+#     cost_fixed = st.number_input(
+#         "Fixed base cost for the whole program:", min_value=0, value=5000)
 
-    cost_per_flight = st.number_input(
-        "Fixed cost per flight mission:", min_value=0, value=100)
+#     cost_per_flight = st.number_input(
+#         "Fixed cost per flight mission:", min_value=0, value=100)
 
-    cost_per_flight_hour = st.number_input(
-        "Variable cost per flight hour:", min_value=0, value=50)
+#     cost_per_flight_hour = st.number_input(
+#         "Variable cost per flight hour:", min_value=0, value=50)
 
 
 ###############################################################################
@@ -540,7 +572,8 @@ with st.expander("View map of missions", expanded=True):
     m = folium.Map(location=center_coords, zoom_start=12)
     folium.GeoJson(
         scan_areas,
-        style_function=lambda x: {"color": "#000000", "weight": 3},
+        style_function=simplestyle_style_function,
+        # style_function=lambda x: {"color": "#000000", "weight": 3},
         # popup=GeoJsonPopup(
         #     fields=["name"],
         #     aliases=["Name"],
@@ -551,7 +584,8 @@ with st.expander("View map of missions", expanded=True):
     ).add_to(m)
     folium.GeoJson(
         launch_points,
-        style_function=lambda x: {"color": "#0000ff", "weight": 3},
+        style_function=simplestyle_style_function,
+        # style_function=lambda x: {"color": "#0000ff", "weight": 3},
         popup=GeoJsonPopup(
             fields=["name", "address"],
             aliases=["Name", "Address"],
@@ -566,22 +600,23 @@ with st.expander("View map of missions", expanded=True):
 
     # ).add_to(m)
 
-    folium.GeoJson(
-        passes,
-        style_function=lambda x: {"color": "#00ff00", "weight": 1}
-    ).add_to(m)
-    if passes_crosshatch is not None:
-        folium.GeoJson(
-            passes_crosshatch,
-            style_function=lambda x: {"color": "#00ff00", "weight": 1}
-        ).add_to(m)
+    # folium.GeoJson(
+    #     passes,
+    #     style_function=lambda x: {"color": "#00ff00", "weight": 1}
+    # ).add_to(m)
+    # if passes_crosshatch is not None:
+    #     folium.GeoJson(
+    #         passes_crosshatch,
+    #         style_function=lambda x: {"color": "#00ff00", "weight": 1}
+    #     ).add_to(m)
 
     folium.GeoJson(
         missions,
-        style_function=lambda x: {
-            "color": x['properties']["stroke"],
-            "weight": x['properties']["stroke-width"]
-        },
+        # style_function=lambda x: {
+        #     "color": x['properties']["stroke"],
+        #     "weight": x['properties']["stroke-width"]
+        # },
+        style_function=simplestyle_style_function,
         popup=GeoJsonPopup(
             fields=["name", "index", "launch_point",
                     "duration", "start", "end"],
@@ -625,8 +660,79 @@ with st.expander("View missions details", expanded=False):
     st.altair_chart(launch_point_chart, use_container_width=True)
 
 ###############################################################################
-st.markdown("## 4. Upload Missions to Cloud")
+st.markdown("## 4. Get Missions")
 
-if st.button("Upload Missions"):
-    # asyncio.run(upload_missions())
-    st.text("OK")
+
+missions_protos_json = [
+    generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait)
+    for i, row in missions.iterrows()
+]
+
+# Create an in-memory bytes buffer to hold the ZIP file
+zip_buffer = io.BytesIO()
+with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+    for i, mission_proto_json in enumerate(missions_protos_json):
+        filename = f"mission_{i}.json"
+        zip_file.writestr(filename, mission_proto_json)
+# Seek to the beginning of the BytesIO buffer
+zip_buffer.seek(0)
+# Provide the ZIP file for download
+st.download_button(
+    label="Download zip file of all missions.json",
+    icon="🗄️",
+    data=zip_buffer,
+    file_name="missions.zip",
+    mime="application/zip"
+)
+
+with st.expander("Skydio Cloud settings", expanded=False):
+
+    cloud_api_url = st.text_input(
+        "Cloud API URL", value="https://api.skydio.com/api/v0/mission_document/template")
+    api_key = st.text_input("API Token", type="password")
+
+
+if api_key is not None and cloud_api_url is not None and cloud_api_url != "" and api_key != "" and len(missions_protos_json) > 0:
+    if st.button("Upload all missions to Skydio Cloud", icon="🚀"):
+        upload_progress_bar = st.progress(0.0, text="Uploading missions")
+
+        async def upload_mission(session, request_url, headers, mission_json_data, i):
+            upload_progress_bar.progress(
+                i/len(missions_protos_json), text=f"Uploading missions ({i}/{len(missions_protos_json)})")
+            response = await session.post(request_url, headers=headers, data=mission_json_data)
+            if response.status_code != 200:
+                return f"Mission {i}: {response.text}"
+            return None
+
+        async def upload_missions():
+            headers = {
+                "Authorization": f"{api_key}",
+                "Content-Type": "application/json"
+            }
+            error_messages = []
+
+            async with httpx.AsyncClient() as session:
+                tasks = []
+                for i, mission_proto_json in enumerate(missions_protos_json):
+                    tasks.append(upload_mission(session, cloud_api_url,
+                                                headers, mission_proto_json, i))
+
+                results = await asyncio.gather(*tasks)
+
+            for result in results:
+                if result:
+                    error_messages.append(result)
+
+            upload_progress_bar.progress(100, text="Finalizing")
+            time.sleep(1.0)
+            upload_progress_bar.empty()
+
+            if error_messages:
+                st.error("Errors occurred during the upload:\n" +
+                         "\n".join(error_messages))
+            else:
+                st.success("All missions uploaded successfully!")
+        asyncio.run(upload_missions())
+else:
+    st.warning(
+        "Please provide the Cloud API URL and API Token in Skydio Cloud settings above in order to upload missions")
