@@ -10,11 +10,13 @@ import folium
 import time
 from folium.features import GeoJsonPopup, GeoJsonTooltip
 from streamlit_folium import st_folium
-from shapely.geometry import Point
-from shapely.ops import transform
+import altair as alt
 import pyproj
 import colorsys
 import math
+import warnings
+
+warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
 
 
 def generate_random_saturated_color(index):
@@ -91,9 +93,8 @@ def preprocess(geojson_file) -> pd.DataFrame:
 
     return (center_coords, launch_points_df, scan_areas_df)
 
-# @st.cache_data
 
-
+@st.cache_data(show_spinner=False)
 def process(
         geojson_file, _launch_points_df, _scan_areas_df,
         corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch,
@@ -132,8 +133,6 @@ def process(
     else:
         passes_crosshatch = None
 
-    process_progress_bar.progress(50, text="Generating optimal missions")
-
     start_slice = 0
     end_slice = slices.shape[0]
 
@@ -141,9 +140,10 @@ def process(
     current_start = start_slice
 
     while current_start < end_slice:
+        time.sleep(0.01)
 
-        process_progress_bar.progress(50+50*math.floor((current_start-start_slice)/(
-            end_slice-start_slice)), text="Generating optimal missions")
+        process_progress_bar.progress(30+math.floor(70*(current_start-start_slice)/(
+            end_slice-start_slice)), text=f"Generating optimal slices {current_start-start_slice}/{end_slice-start_slice}")
 
         # Binary search to find the best range
         low, high = current_start + 1, end_slice
@@ -158,7 +158,7 @@ def process(
             mission_duration = compute_mission_duration(
                 mission_path, altitude, speed)
             reward = mid-current_start
-            st.text(f"{current_start}, {mid}: {mission_duration}")
+            # st.text(f"{current_start}, {mid}: {mission_duration}")
 
             if mission_duration is None:  # Invalid range, increase size
                 low = mid + 1
@@ -166,6 +166,8 @@ def process(
                 high = mid - 1
             else:  # Valid range, optimize for maximum reward
                 if reward > best_reward:
+                    best_mission_path = mission_path
+                    best_mission_duration = mission_duration
                     best_reward = reward
                     best_end = mid
                 low = mid + 1  # Explore larger ranges
@@ -177,38 +179,15 @@ def process(
 
         # Finalize the missions
         missions_optim.append((current_start, best_end,
-                               mission_path, mission_duration))
+                               best_mission_path, best_mission_duration))
         current_start = best_end  # Update start for the next range
 
-    # missions_optim = [
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 0, 20),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 20, 37),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 37, 92),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 92, 165),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 165, 200),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 200, 275),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 275, 342),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 342, 384),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 384, 427),
-    #     compute_total_mission_path(
-    #         launch_points, slices, passes, passes_crosshatch, 427, 560),
-    # ]
-
     missions = gpd.GeoDataFrame({
-        'geometry': [mission_path for (start, end, mission_path, mission_duration) in missions],
-        'start': [start for (start, end, mission_path, mission_duration) in missions],
-        'end': [end for (start, end, mission_path, mission_duration) in missions],
-        'duration': [mission_duration for (start, end, mission_path, mission_duration) in missions],
-        'color': [generate_random_saturated_color(i) for i in range(len(missions))]
+        'geometry': [mission_path for (start, end, mission_path, mission_duration) in missions_optim],
+        'start': [start for (start, end, mission_path, mission_duration) in missions_optim],
+        'end': [end for (start, end, mission_path, mission_duration) in missions_optim],
+        'duration': [mission_duration for (start, end, mission_path, mission_duration) in missions_optim],
+        'color': [generate_random_saturated_color(i) for i in range(len(missions_optim))]
     },
         crs=scan_areas.crs)
 
@@ -429,6 +408,20 @@ with st.expander("View map of missions", expanded=True):
     ).add_to(m)
     st_folium(m, width=700, height=500, return_on_hover=False)
 
+with st.expander("View histogram of missions duration", expanded=False):
+
+    chart = alt.Chart(missions).mark_bar().encode(
+        x=alt.X("duration", bin=alt.Bin(maxbins=100, extent=[0, max_mission_duration*1.2]),
+                title=f"Mission duration (Binned)"),
+        y=alt.Y('count()', title='Frequency')
+    ).properties(
+        # title=f"Histogram of missions durations",
+        width=600,
+        height=400
+    )
+
+    # Display chart
+    st.altair_chart(chart, use_container_width=True)
 
 ###############################################################################
 st.markdown("## 4. Upload Missions to Cloud")
