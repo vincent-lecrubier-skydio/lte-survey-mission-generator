@@ -1,4 +1,4 @@
-from shapely import MultiPolygon
+from shapely import MultiPolygon, Point
 import streamlit as st
 import json
 from shapely.geometry import shape, LineString, mapping, Polygon
@@ -431,7 +431,7 @@ def compute_oriented_bounding_box(polygons, direction):
     return oriented_bbox
 
 
-def compute_mission_path(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int):
+def compute_mission_passes(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int):
     """
     Compute the mission path based on the slices and passes.
 
@@ -471,15 +471,12 @@ def compute_mission_path(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, pas
     return mission_path_df
 
 
-def compute_closest_launch_point(launch_points: gpd.GeoDataFrame, mission_path_df: gpd.GeoDataFrame):
+def compute_closest_launch_point(launch_points: gpd.GeoDataFrame, mission_start, mission_end):
     """
     Compute the closest launch point to the mission path. 
     The point must minimize the distance to the first point of mission path and last point of mission path.
     mission_path_df is a GeoDataFrame containing the mission path as many LineString
     """
-    # Compute the start and end points of the mission path
-    mission_start = mission_path_df.iloc[0].geometry.coords[0]
-    mission_end = mission_path_df.iloc[-1].geometry.coords[-1]
 
     # Compute the distance between each launch point and the start and end points of the mission path
     distances = launch_points.distance(
@@ -487,15 +484,50 @@ def compute_closest_launch_point(launch_points: gpd.GeoDataFrame, mission_path_d
 
     # Find the launch point with the minimum distance
     closest_launch_point = launch_points.iloc[distances.idxmin()]
+    # closest_launch_point = launch_points[distances.idxmin()]
 
     return closest_launch_point
 
 
-def compute_total_mission_path(remaining_corridors, passes, passes_crosshatch, mask_square):
-    pass
+def compute_total_mission_path(launch_points: gpd.GeoDataFrame, slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int):
+    mission_passes = compute_mission_passes(
+        slices, passes, passes_crosshatch, min_slice_index, max_slice_index)
+
+    # Invert every other line to create a lawnmower pattern
+    mission_passes['geometry'] = mission_passes.apply(
+        lambda row: LineString(
+            row.geometry.coords[::-1]) if row.name % 2 != 0 else row.geometry,
+        axis=1
+    )
+
+    mission_start = Point(mission_passes.iloc[0].geometry.coords[0])
+    mission_end = Point(mission_passes.iloc[-1].geometry.coords[-1])
+
+    closest_launch_point = compute_closest_launch_point(
+        launch_points, mission_start, mission_end)
+
+    # Recreate the full mission path by:
+    # 1. Adding the launch point to the start of the mission path
+    # 2. Adding the mission passes
+    # 3. Adding the launch point to the end of the mission path
+    # And then merging the segments
+    all_coords = []
+    all_coords.append(closest_launch_point.geometry.coords[0])
+    for mission_pass in mission_passes.itertuples():
+        if mission_pass.geometry.geom_type == "LineString":
+            all_coords.extend(mission_pass.geometry.coords)
+        elif mission_pass.geometry.geom_type == "MultiLineString":
+            for line in mission_pass.geometry.geoms:
+                all_coords.extend(line.coords)
+        else:
+            raise ValueError("Invalid geometry type in mission passes.")
+    all_coords.append(closest_launch_point.geometry.coords[0])
+    # print(all_coords)
+    mission_path = LineString(all_coords)
+    return mission_path
 
 
-def generate_next_lawnmower(scan_areas, launch_points, corridor_direction, corridor_width, passes, passes_crosshatch, iteration_spacing):
+def generate_next_lawnmower(slices_gdf, scan_areas, launch_points, corridor_direction, corridor_width, passes, passes_crosshatch, iteration_spacing):
     """
     Generate the next lawnmower pattern
     """
@@ -515,14 +547,15 @@ def generate_next_lawnmower(scan_areas, launch_points, corridor_direction, corri
     # result = compute_oriented_bounding_box(scan_areas, corridor_direction)
     # result_gdf = gpd.GeoDataFrame(geometry=[result], crs=scan_areas.crs)
 
-    slices_gdf = compute_oriented_slices(
-        scan_areas, corridor_direction, corridor_width, iteration_spacing)
+    # slices_gdf = compute_oriented_slices(
+    #     scan_areas, corridor_direction, corridor_width, iteration_spacing)
 
-    result_gdf = compute_mission_path(
-        slices_gdf, passes, passes_crosshatch, 87, 165)
+    # result_gdf = compute_mission_passes(
+    #     slices_gdf, passes, passes_crosshatch, 87, 165)
+
+    result = compute_total_mission_path(
+        launch_points, slices_gdf, passes, passes_crosshatch, 87, 165)
+
+    result_gdf = gpd.GeoDataFrame({'geometry': [result]}, crs=scan_areas.crs)
 
     return result_gdf
-
-
-def generate_next_mission(scan_areas, remaining_corridors, corridor_direction, passes, passes_crosshatch):
-    return generate_next_lawnmower(scan_areas, remaining_corridors, corridor_direction, passes, passes_crosshatch)

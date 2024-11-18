@@ -11,7 +11,7 @@ from shapely.geometry import Point
 from shapely.ops import transform
 import pyproj
 
-from geometry import generate_next_lawnmower, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
+from geometry import compute_oriented_slices, generate_next_lawnmower, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
 
 
 @st.cache_data
@@ -75,10 +75,11 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
     # Apply the transformation to scan areas
     scan_areas = project_df(project_to_utm, _scan_areas_df)
 
-    process_progress_bar.progress(10, text="Generating corridors")
+    process_progress_bar.progress(10, text="Generating slices")
 
-    # corridors = generate_corridors(
-    #     scan_areas, corridor_direction, corridor_width)
+    iteration_spacing = pass_spacing
+    slices = compute_oriented_slices(
+        scan_areas, corridor_direction, corridor_width, iteration_spacing)
 
     process_progress_bar.progress(20, text="Generating passes")
 
@@ -94,7 +95,9 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
     process_progress_bar.progress(50, text="Generating optimal missions")
 
     lawnmowers = generate_next_lawnmower(
-        scan_areas, launch_points, corridor_direction, corridor_width, passes, passes_crosshatch, pass_spacing)
+        slices,
+        scan_areas,
+        launch_points, corridor_direction, corridor_width, passes, passes_crosshatch, pass_spacing)
 
     process_progress_bar.progress(100, text="Finalizing")
     time.sleep(1.0)
@@ -102,7 +105,7 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
 
     return (
         project_df(project_to_wgs84, scan_areas),
-        # project_df(project_to_wgs84, corridors),
+        project_df(project_to_wgs84, launch_points),
         project_df(project_to_wgs84, passes),
         project_df(project_to_wgs84, passes_crosshatch),
         project_df(project_to_wgs84, lawnmowers)
@@ -241,7 +244,7 @@ st.markdown("## 3. Compute missions")
 
 (
     scan_areas,
-    # corridors,
+    launch_points,
     passes,
     passes_crosshatch,
     lawnmowers
@@ -260,14 +263,25 @@ with st.expander("View map of missions", expanded=True):
     m = folium.Map(location=center_coords, zoom_start=12)
     folium.GeoJson(
         scan_areas,
-        style_function=lambda x: {"color": "#0000ff", "weight": 3}
-        # popup=GeoJsonPopup(
-        #     fields=["name"],
-        #     aliases=["Name:"],
-        #     localize=True,
-        #     labels=True,
-        #     style="background-color: yellow;",
-        # ),
+        style_function=lambda x: {"color": "#0000ff", "weight": 3},
+        popup=GeoJsonPopup(
+            fields=["name"],
+            aliases=["Name:"],
+            localize=True,
+            labels=True,
+            style="background-color: yellow;",
+        ),
+    ).add_to(m)
+    folium.GeoJson(
+        launch_points,
+        style_function=lambda x: {"color": "#0000ff", "weight": 3},
+        popup=GeoJsonPopup(
+            fields=["name"],
+            aliases=["Name:"],
+            localize=True,
+            labels=True,
+            style="background-color: yellow;",
+        ),
     ).add_to(m)
     # folium.GeoJson(
     #     corridors,
@@ -287,7 +301,7 @@ with st.expander("View map of missions", expanded=True):
 
     folium.GeoJson(
         lawnmowers,
-        style_function=lambda x: {"color": "#ff00ff", "weight": 1},
+        style_function=lambda x: {"color": "#ff00ff", "weight": 2},
         # popup=GeoJsonPopup(
         #     fields=["name"],
         #     aliases=["Name:"],
