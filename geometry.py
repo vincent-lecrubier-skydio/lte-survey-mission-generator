@@ -340,8 +340,10 @@ def generate_slices(rectangle, crs, corridor_width, slice_thickness):
         # Calculate coordinates for the polygon
         slice_min_x = minx + slice_index_within_corridor * slice_thickness
         slice_max_x = min(slice_min_x + slice_thickness, maxx)
-        corridor_min_y = miny + corridor_index * corridor_width
-        corridor_max_y = min(corridor_min_y + corridor_width, maxy)
+        # corridor_min_y = miny + corridor_index * corridor_width
+        # corridor_max_y = min(corridor_min_y + corridor_width, maxy)
+        corridor_min_y = maxy - corridor_index * corridor_width
+        corridor_max_y = max(corridor_min_y - corridor_width, miny)
 
         # Create the polygon
         poly = Polygon([
@@ -379,7 +381,7 @@ def compute_oriented_slices(polygons, direction, corridor_width, slice_thickness
     centroid = combined_geom.centroid
 
     # Rotate the combined geometry by the negative direction (align to x-axis)
-    rotated_geom = rotate(combined_geom, 270-direction,
+    rotated_geom = rotate(combined_geom, 90-direction,
                           origin=centroid, use_radians=False)
 
     # Create the slices in rotated space
@@ -388,7 +390,7 @@ def compute_oriented_slices(polygons, direction, corridor_width, slice_thickness
 
     # Rotate the slices back to the original orientation
     slices["geometry"] = slices["geometry"].apply(
-        lambda geom: rotate(geom, direction-270,
+        lambda geom: rotate(geom, direction-90,
                             origin=centroid, use_radians=False)
     )
     return slices
