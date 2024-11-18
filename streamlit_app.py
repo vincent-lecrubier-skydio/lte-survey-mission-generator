@@ -94,7 +94,7 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
     process_progress_bar.progress(50, text="Generating optimal missions")
 
     lawnmowers = generate_next_lawnmower(
-        scan_areas, launch_points, corridor_direction, passes, passes_crosshatch, pass_spacing)
+        scan_areas, launch_points, corridor_direction, corridor_width, passes, passes_crosshatch, pass_spacing)
 
     process_progress_bar.progress(100, text="Finalizing")
     time.sleep(1.0)
@@ -274,25 +274,27 @@ with st.expander("View map of missions", expanded=True):
     #     style_function=lambda x: {"color": "#ff0000", "weight": 2}
 
     # ).add_to(m)
+
     folium.GeoJson(
         passes,
-        style_function=lambda x: {"color": "#00cc00", "weight": 2}
+        style_function=lambda x: {"color": "#00ff00", "weight": 1}
     ).add_to(m)
     if passes_crosshatch is not None:
         folium.GeoJson(
             passes_crosshatch,
-            style_function=lambda x: {"color": "#00aa00", "weight": 2}
+            style_function=lambda x: {"color": "#00ff00", "weight": 1}
         ).add_to(m)
+
     folium.GeoJson(
         lawnmowers,
         style_function=lambda x: {"color": "#ff00ff", "weight": 1},
-        popup=GeoJsonPopup(
-            fields=["name"],
-            aliases=["Name:"],
-            localize=True,
-            labels=True,
-            style="background-color: yellow;",
-        ),
+        # popup=GeoJsonPopup(
+        #     fields=["name"],
+        #     aliases=["Name:"],
+        #     localize=True,
+        #     labels=True,
+        #     style="background-color: yellow;",
+        # ),
     ).add_to(m)
     st_folium(m, width=700, height=500, return_on_hover=False)
 

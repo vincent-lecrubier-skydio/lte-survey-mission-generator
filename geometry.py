@@ -361,11 +361,7 @@ def generate_slices(rectangle, crs, corridor_width, slice_thickness):
 
 def compute_oriented_slices(polygons, direction, corridor_width, slice_thickness):
     """
-    Compute the oriented bounding box of all polygons in a GeoDataFrame.
-
-    :param df: GeoDataFrame containing polygons.
-    :param direction: Orientation angle in degrees (counterclockwise from x-axis).
-    :return: Oriented bounding box as a Polygon.
+    Compute slices of all polygons in a GeoDataFrame oriented along a specified direction.
     """
     # Merge all polygons into a single geometry (union)
     combined_geom = polygons.unary_union
@@ -418,7 +414,7 @@ def compute_oriented_bounding_box(polygons, direction):
     centroid = combined_geom.centroid
 
     # Rotate the combined geometry by the negative direction (align to x-axis)
-    rotated_geom = rotate(combined_geom, -direction,
+    rotated_geom = rotate(combined_geom, 90-direction,
                           origin=centroid, use_radians=False)
 
     # Get the bounding box of the rotated geometry
@@ -429,17 +425,77 @@ def compute_oriented_bounding_box(polygons, direction):
         [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy), (minx, miny)])
 
     # Rotate the bounding box back to the original orientation
-    oriented_bbox = rotate(rotated_bbox, direction,
+    oriented_bbox = rotate(rotated_bbox, direction-90,
                            origin=centroid, use_radians=False)
 
     return oriented_bbox
 
 
-def compute_mission_duration(remaining_corridors, passes, passes_crosshatch, mask_square):
+def compute_mission_path(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int):
+    """
+    Compute the mission path based on the slices and passes.
+
+    :param slices: GeoDataFrame containing slice geometries.
+    :param passes: GeoDataFrame containing primary pass geometries.
+    :param passes_crosshatch: GeoDataFrame containing crosshatch pass geometries.
+    :param min_slice_index: Minimum index of the slices to consider.
+    :param max_slice_index: Maximum index of the slices to consider.
+    :return: GeoDataFrame of lines representing the mission path.
+    """
+
+    # Merge all slices between min_index and max_index into a single geometry (union)
+    # Include max index
+    slices_to_merge = slices.iloc[min_slice_index:max_slice_index + 1]
+    merged_slices = slices_to_merge.unary_union
+
+    # Compute the mission path by intersecting the combined slices with the passes
+    mission_passes = merged_slices.intersection(passes.unary_union)
+    mission_passes_crosshatch = merged_slices.intersection(
+        passes_crosshatch.unary_union) if passes_crosshatch is not None else None
+
+    # Combine the resulting geometries
+    mission_lines = []
+    for geom in [mission_passes, mission_passes_crosshatch]:
+        if geom is None:
+            continue
+        if geom.is_empty:
+            continue
+        if geom.geom_type == "LineString":
+            mission_lines.append(geom)
+        elif geom.geom_type == "MultiLineString":
+            mission_lines.extend(geom.geoms)
+
+    # Create a GeoDataFrame from the resulting lines
+    mission_path_df = gpd.GeoDataFrame(geometry=mission_lines, crs=slices.crs)
+
+    return mission_path_df
+
+
+def compute_closest_launch_point(launch_points: gpd.GeoDataFrame, mission_path_df: gpd.GeoDataFrame):
+    """
+    Compute the closest launch point to the mission path. 
+    The point must minimize the distance to the first point of mission path and last point of mission path.
+    mission_path_df is a GeoDataFrame containing the mission path as many LineString
+    """
+    # Compute the start and end points of the mission path
+    mission_start = mission_path_df.iloc[0].geometry.coords[0]
+    mission_end = mission_path_df.iloc[-1].geometry.coords[-1]
+
+    # Compute the distance between each launch point and the start and end points of the mission path
+    distances = launch_points.distance(
+        mission_start) + launch_points.distance(mission_end)
+
+    # Find the launch point with the minimum distance
+    closest_launch_point = launch_points.iloc[distances.idxmin()]
+
+    return closest_launch_point
+
+
+def compute_total_mission_path(remaining_corridors, passes, passes_crosshatch, mask_square):
     pass
 
 
-def generate_next_lawnmower(scan_areas, launch_points, corridor_direction, passes, passes_crosshatch, iteration_spacing):
+def generate_next_lawnmower(scan_areas, launch_points, corridor_direction, corridor_width, passes, passes_crosshatch, iteration_spacing):
     """
     Generate the next lawnmower pattern
     """
@@ -459,8 +515,11 @@ def generate_next_lawnmower(scan_areas, launch_points, corridor_direction, passe
     # result = compute_oriented_bounding_box(scan_areas, corridor_direction)
     # result_gdf = gpd.GeoDataFrame(geometry=[result], crs=scan_areas.crs)
 
-    result_gdf = compute_oriented_slices(
-        scan_areas, corridor_direction, 800, iteration_spacing)
+    slices_gdf = compute_oriented_slices(
+        scan_areas, corridor_direction, corridor_width, iteration_spacing)
+
+    result_gdf = compute_mission_path(
+        slices_gdf, passes, passes_crosshatch, 87, 165)
 
     return result_gdf
 
