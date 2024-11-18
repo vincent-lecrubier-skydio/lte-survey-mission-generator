@@ -1,6 +1,9 @@
 from datetime import datetime
+import json
 from typing import Union
+import uuid
 from shapely import LineString
+from shapely.geometry import mapping
 from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
 import streamlit as st
 import pandas as pd
@@ -59,6 +62,26 @@ def generate_random_saturated_color(index):
     return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
 
 
+def gdfs_to_json(*gdfs):
+    features = []
+    for gdf in gdfs:
+        for _, row in gdf.iterrows():
+            properties = {key: value for key, value in row.items(
+            ) if key != 'geometry' and pd.notnull(value)}
+            feature = {
+                "type": "Feature",
+                "properties": properties,
+                "geometry": mapping(row.geometry)
+            }
+            features.append(feature)
+    result = {
+        "type": "FeatureCollection",
+        "features": features
+    }
+    geojson_str = json.dumps(result)
+    return geojson_str
+
+
 def compute_mission_duration(
     mission_path: LineString,
     altitude: float,
@@ -78,6 +101,111 @@ def compute_mission_duration(
     duration_waypoints = len(mission_path.coords) * \
         time_lost_per_waypoint_seconds
     return duration_travel + duration_ascent + duration_descent + duration_waypoints
+
+
+def generate_mission(linestring, index, altitude, name_template, rtx_height, rtx_speed, rtx_wait):
+    with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
+        mission_proto = json.load(mission_proto_file)
+        mission_proto["displayName"] = name_template.format(
+            index=index, date=datetime.now().isoformat())
+        mission_proto["templateUuid"] = str(uuid.uuid4())
+        mission_proto["rtxSettings"]["minimumHeight"] = rtx_height
+        mission_proto["rtxSettings"]["speed"] = rtx_speed
+        mission_proto["rtxSettings"]["waitTime"] = rtx_wait
+        mission_proto["actions"][0]["actionUuid"] = str(uuid.uuid4())
+        mission_proto['actions'][0]['args']['sequence']["actions"] = [
+            {
+                "actionUuid": str(uuid.uuid4()),
+                "actionKey": "Sequence",
+                "args": {
+                    "sequence": {
+                        "name": "",
+                        "actions": [
+                            {
+                                "actionUuid": str(uuid.uuid4()),
+                                "actionKey": "SetObstacleAvoidance",
+                                "args": {
+                                    "setObstacleAvoidance": {
+                                        "oaSetting": 1
+                                    },
+                                    "photoOnCompletion": False,
+                                    "isSkippable": False
+                                }
+                            },
+                            {
+                                "actionUuid": str(uuid.uuid4()),
+                                "actionKey": "StopVideo",
+                                "args": {
+                                    "stopVideo": {
+                                        "noArgs": False
+                                    },
+                                    "photoOnCompletion": False,
+                                    "isSkippable": False
+                                }
+                            },
+                            {
+                                "actionUuid": str(uuid.uuid4()),
+                                "actionKey": "GotoWaypoint",
+                                "args": {
+                                    "gotoWaypoint": {
+                                        "waypoint": {
+                                            "xy": {
+                                                "frame": 3,
+                                                "x": point[1],
+                                                "y": point[0]
+                                            },
+                                            "z": {
+                                                "frame": 5,
+                                                "value": altitude  # m = 200ft
+                                            },
+                                            "heading": {
+                                                "value": 1.5707963267948966,
+                                                "frame": 3
+                                            },
+                                            "gimbalPitch": {
+                                                "value": 0.523  # 30 deg down
+                                            }
+                                        },
+                                        "motionArgs": {
+                                            "traversalArgs": {
+                                                "heightMode": 1,
+                                                "speed": 16.0  # m/s = 36mph
+                                            },
+                                            "lookAtArgs": {
+                                                "ignoreTargetHeading": False,
+                                                "headingMode": 7,
+                                                "ignoreTargetGimbalPitch": False,
+                                                "gimbalPitchMode": 1
+                                            }
+                                        }
+                                    },
+                                    "photoOnCompletion": False,
+                                    "isSkippable": False
+                                }
+                            },
+                            {
+                                "actionUuid": str(uuid.uuid4()),
+                                "actionKey": "SetObstacleAvoidance",
+                                "args": {
+                                    "setObstacleAvoidance": {
+                                        "oaSetting": 1
+                                    },
+                                    "photoOnCompletion": False,
+                                    "isSkippable": False
+                                }
+                            }
+                        ],
+                        "hideReverseUi": False
+                    },
+                    "photoOnCompletion": False,
+                    "isSkippable": False
+                }
+            }
+            for point in linestring.coords
+        ]
+
+        # return json string
+        return json.dumps(mission_proto, indent=2)
 
 
 @st.cache_data
@@ -239,7 +367,8 @@ def process(
         'start': [start for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
         'end': [end for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
         'duration': [math.ceil(mission_duration) for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
-        'color': [generate_random_saturated_color(i) for i in range(len(missions_optim))],
+        'stroke': [generate_random_saturated_color(i) for i in range(len(missions_optim))],
+        'stroke-width': [2 for i in range(len(missions_optim))],
         'index': [i for i in range(len(missions_optim))]
     },
         crs=scan_areas.crs)
@@ -374,19 +503,6 @@ with st.expander("Cost Estimation Parameters"):
 ###############################################################################
 st.markdown("## 3. Compute missions")
 
-# # Initialize session state variable
-# if "show_rest" not in st.session_state:
-#     st.session_state["show_rest"] = False
-
-# # Button to trigger rendering
-# if st.button("Show More"):
-#     st.session_state["show_rest"] = True  # Update session state
-
-# # Conditionally render the rest of the app
-# if not st.session_state.show_rest:
-#     st.stop()
-
-
 (
     scan_areas,
     launch_points,
@@ -409,6 +525,18 @@ st.markdown("## 3. Compute missions")
 )
 
 with st.expander("View map of missions", expanded=True):
+
+    mission_geojson_data = gdfs_to_json(
+        scan_areas, launch_points, missions).encode('utf-8')
+
+    st.download_button(
+        label="Download as GeoJSON file",
+        icon="🗺️",
+        data=mission_geojson_data,
+        file_name="missions.geojson",
+        mime="application/json",
+    )
+
     m = folium.Map(location=center_coords, zoom_start=12)
     folium.GeoJson(
         scan_areas,
@@ -451,33 +579,50 @@ with st.expander("View map of missions", expanded=True):
     folium.GeoJson(
         missions,
         style_function=lambda x: {
-            "color": x['properties']["color"], "weight": 2},
+            "color": x['properties']["stroke"],
+            "weight": x['properties']["stroke-width"]
+        },
         popup=GeoJsonPopup(
             fields=["name", "index", "launch_point",
                     "duration", "start", "end"],
-            aliases=["Name", "Number", "Launch",
-                     "Duration", "Start", "End"],
+            aliases=["Mission Name", "Mission Number", "Launch Point",
+                     "Duration", "Start Slice", "End Slice"],
             localize=True,
             labels=True,
             style="background-color: yellow;",
         ),
     ).add_to(m)
+
     st_folium(m, width=700, height=500, return_on_hover=False)
 
-with st.expander("View histogram of missions duration", expanded=False):
+with st.expander("View missions details", expanded=False):
 
-    chart = alt.Chart(missions).mark_bar().encode(
+    mission_duration_chart = alt.Chart(missions).mark_bar().encode(
         x=alt.X("duration", bin=alt.Bin(maxbins=100, extent=[0, max_mission_duration*1.2]),
-                title=f"Mission duration (Binned)"),
-        y=alt.Y('count()', title='Frequency')
+                title=f"Mission duration"),
+        y=alt.Y('count()', title='Number of Missions')
     ).properties(
-        # title=f"Histogram of missions durations",
+        title=f"Histogram of missions durations",
         width=600,
         height=400
     )
+    st.altair_chart(mission_duration_chart, use_container_width=True)
 
-    # Display chart
-    st.altair_chart(chart, use_container_width=True)
+    launch_point_chart = alt.Chart(missions).mark_bar().encode(
+        x=alt.X('launch_point:N', title='Mission Launch Point', axis=alt.Axis(
+            labelAngle=-45,  # Rotate labels for better readability
+            labelOverlap=False,  # Avoid overlapping labels
+            labelLimit=200,  # Increase the maximum length of labels
+            labelAlign='right'  # Align labels to avoid truncation
+        )),
+        y=alt.Y('count()', title='Number of Missions'),
+        tooltip=['launch_point', 'count()']  # Tooltip for more information
+    ).properties(
+        title="Histogram of missions per launch point",
+        width=600,
+        height=400
+    )
+    st.altair_chart(launch_point_chart, use_container_width=True)
 
 ###############################################################################
 st.markdown("## 4. Upload Missions to Cloud")
