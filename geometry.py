@@ -505,26 +505,36 @@ def compute_optimal_mission_configuration(
 
 def get_transitions_distance(gdfs: list[gpd.GeoSeries]) -> float:
     """
-    Compute the sum of distances between the end point of each geometry and the start point of the next
+    Compute the sum of distances between the end point of each geometry and the start point of the next.
     """
     transitions_distance = 0
+
+    # Iterate through the list of GeoSeries
     for idx, gdf in enumerate(gdfs[:-1]):
+        # Get the last geometry in the current GeoSeries
+        current_geom = gdf.iloc[-1]
+        # Get the first geometry in the next GeoSeries
+        next_geom = gdfs[idx + 1].iloc[0]
+
         # Get the end point of the current geometry
-        if gdf.geom_type == 'LineString':
-            end_point = Point(gdf.coords[-1])
-        elif gdf.geom_type == 'MultiLineString':
-            end_point = Point(gdf.geoms[-1].coords[-1])
+        if current_geom.geom_type == 'LineString':
+            end_point = Point(current_geom.coords[-1])
+        elif current_geom.geom_type == 'MultiLineString':
+            end_point = Point(current_geom.geoms[-1].coords[-1])
         else:
             raise ValueError("Invalid geometry type in mission passes.")
+
         # Get the start point of the next geometry
-        if gdfs[idx+1].geom_type == 'LineString':
-            start_point = Point(gdfs[idx+1].coords[0])
-        elif gdfs[idx+1].geom_type == 'MultiLineString':
-            start_point = Point(gdfs[idx+1].geoms[0].coords[0])
+        if next_geom.geom_type == 'LineString':
+            start_point = Point(next_geom.coords[0])
+        elif next_geom.geom_type == 'MultiLineString':
+            start_point = Point(next_geom.geoms[0].coords[0])
         else:
             raise ValueError("Invalid geometry type in mission passes.")
+
         # Compute the distance between the end point of the current geometry and the start point of the next
         transitions_distance += end_point.distance(start_point)
+
     return transitions_distance
 
 
