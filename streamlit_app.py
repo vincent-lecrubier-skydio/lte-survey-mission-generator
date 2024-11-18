@@ -15,8 +15,33 @@ import pyproj
 import colorsys
 import math
 import warnings
+import requests
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
+mapbox_token = "pk.eyJ1Ijoic2t5ZGlvLXRlYW0iLCJhIjoiY20zbW9mYmZ0MGpsMTJpcHl3bWhsbm5rcSJ9.2bTFNXUX0RrFKLiH8EgW_g"
+
+
+def reverse_geocode(lat, lon):
+    """
+    Reverse geocode a latitude and longitude using Mapbox API v6.
+    """
+    # url = f"https://api.mapbox.com/geocoding/v6/mapbox.places/{lon},{lat}.json"
+    url = f"https://api.mapbox.com/search/geocode/v6/reverse?longitude={lon}&latitude={lat}"
+    params = {
+        'access_token': mapbox_token,
+        'types': 'address,place',  # Specify the types of places to include
+        'limit': 1                # Number of results to return
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        if data['features']:
+            # Extract the full address
+            return data['features'][0]['properties']['name']
+        else:
+            return "Address not found"
+    else:
+        return "Address error"
 
 
 def generate_random_saturated_color(index):
@@ -75,6 +100,11 @@ def preprocess(geojson_file) -> pd.DataFrame:
     # Fill missing 'name' values
     launch_points_df['name'] = launch_points_df.apply(
         lambda row: row['name'] if row['name'] else f"Launch Point {row.name}",
+        axis=1
+    )
+    launch_points_df['address'] = launch_points_df.apply(
+        lambda row: reverse_geocode(
+            row.geometry.y, row.geometry.x) if row.geometry else "No geometry",
         axis=1
     )
 
@@ -371,8 +401,8 @@ with st.expander("View map of missions", expanded=True):
         launch_points,
         style_function=lambda x: {"color": "#0000ff", "weight": 3},
         popup=GeoJsonPopup(
-            fields=["name"],
-            aliases=["Name:"],
+            fields=["name", "address"],
+            aliases=["Name:", "Address:"],
             localize=True,
             labels=True,
             style="background-color: yellow;",
