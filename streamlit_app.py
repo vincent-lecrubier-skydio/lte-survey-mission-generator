@@ -1,133 +1,144 @@
-import streamlit as st
-import json
-from shapely.geometry import shape, LineString, mapping, Polygon
-from shapely.ops import linemerge
-import numpy as np
-import pyproj
-import math
-from shapely.ops import transform
-import uuid
-from datetime import datetime
-import httpx
 import asyncio
+from datetime import datetime
 import io
-import zipfile
-
+import json
+from typing import Union
+import uuid
+import httpx
+from shapely import LineString
+from shapely.geometry import mapping
+from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
+import streamlit as st
+import pandas as pd
+import geopandas as gpd
 import numpy as np
-from shapely.geometry import LineString, Polygon
-from shapely.ops import transform, linemerge
+import pydeck as pdk
+import folium
+import time
+from folium.features import GeoJsonPopup, GeoJsonTooltip
+from streamlit_folium import st_folium
+import altair as alt
 import pyproj
+import colorsys
+import math
+import zipfile
+import warnings
+import requests
+
+warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
+mapbox_token = "pk.eyJ1Ijoic2t5ZGlvLXRlYW0iLCJhIjoiY20zbW9mYmZ0MGpsMTJpcHl3bWhsbm5rcSJ9.2bTFNXUX0RrFKLiH8EgW_g"
 
 
-def generate_lawnmower_pattern(polygon, spacing, passes):
-    bounds = polygon.bounds
-    minx, miny, maxx, maxy = bounds
-
-    # Create a local projection centered on the polygon
-    local_utm = pyproj.Proj(proj='utm', zone=int(
-        (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
-    wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
-    project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm).transform
-    project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84).transform
-
-    # Convert the polygon to the local UTM coordinates
-    utm_polygon = transform(project_to_utm, polygon)
-
-    # Get the bounds in the local UTM coordinates
-    minx, miny, maxx, maxy = utm_polygon.bounds
-
-    lines = []
-
-    if "North-South" in passes:
-        x_coords = np.arange(minx, maxx, spacing)
-        for i, x in enumerate(x_coords):
-            if i % 2 == 0:
-                lines.append(LineString([(x, miny), (x, maxy)]))
-            else:
-                lines.append(LineString([(x, maxy), (x, miny)]))
-
-    if "East-West" in passes:
-        y_coords = np.arange(miny, maxy, spacing)
-        for i, y in enumerate(y_coords):
-            if i % 2 == 0:
-                lines.append(LineString([(minx, y), (maxx, y)]))
-            else:
-                lines.append(LineString([(maxx, y), (minx, y)]))
-
-    lawnmower_lines = [line.intersection(utm_polygon) for line in lines]
-    lawnmower_lines = [
-        line for line in lawnmower_lines if not line.is_empty and line.geom_type == 'LineString']
-
-    # Connect the lines
-    connected_lines = []
-    for i in range(len(lawnmower_lines) - 1):
-        connected_lines.append(lawnmower_lines[i])
-        start_point = lawnmower_lines[i].coords[-1]
-        end_point = lawnmower_lines[i + 1].coords[0]
-        connected_lines.append(LineString([start_point, end_point]))
-    if len(lawnmower_lines) > 1:
-        connected_lines.append(lawnmower_lines[-1])
-
-    merged_line = linemerge(connected_lines)
-
-    # Convert the merged line back to WGS84 coordinates
-    wgs84_merged_line = transform(project_to_wgs84, merged_line)
-
-    if wgs84_merged_line.geom_type == 'MultiLineString' or wgs84_merged_line.geom_type == 'GeometryCollection':
-        coords = [
-            coord for line in wgs84_merged_line.geoms for coord in line.coords]
-
+def reverse_geocode(lat, lon):
+    """
+    Reverse geocode a latitude and longitude using Mapbox API v6.
+    """
+    # url = f"https://api.mapbox.com/geocoding/v6/mapbox.places/{lon},{lat}.json"
+    url = f"https://api.mapbox.com/search/geocode/v6/reverse?longitude={lon}&latitude={lat}"
+    params = {
+        'access_token': mapbox_token,
+        'types': 'address,place',  # Specify the types of places to include
+        'limit': 1                # Number of results to return
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        if data['features']:
+            if 'context' in data['features'][0]['properties']:
+                # Extract the city and country
+                return data['features'][0]['properties']['context']['address']['name'] + ", " + data['features'][0]['properties']['context']['place']['name']
+            # Extract the full address
+            return data['features'][0]['properties']['name']
+        else:
+            return "Address not found"
     else:
-        coords = wgs84_merged_line.coords
-
-    for point in coords:
-        point = list(point)
-
-    return LineString(coords)
+        return "Address error"
 
 
-def split_polygon_into_squares(polygon, size):
-    bounds = polygon.bounds
-    minx, miny, maxx, maxy = bounds
-
-    # Create a local projection centered on the polygon
-    local_utm = pyproj.Proj(proj='utm', zone=int(
-        (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
-    wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
-    project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm).transform
-    project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84).transform
-
-    # Convert the polygon to the local UTM coordinates
-    utm_polygon = transform(project_to_utm, polygon)
-
-    # Get the bounds in the local UTM coordinates
-    minx, miny, maxx, maxy = utm_polygon.bounds
-
-    squares = []
-    x_coords = np.arange(minx, maxx, size)
-    y_coords = np.arange(miny, maxy, size)
-
-    for x in x_coords:
-        for y in y_coords:
-            square = Polygon([
-                (x, y),
-                (x + size, y),
-                (x + size, y + size),
-                (x, y + size),
-                (x, y)
-            ])
-            intersection = utm_polygon.intersection(square)
-            if not intersection.is_empty:
-                squares.append(transform(project_to_wgs84, intersection))
-
-    return squares
+def generate_random_saturated_color(index):
+    # Generate a random hue (0-360 degrees)
+    hue = (index * 137) % 360  # A multiplier like 137 ensures a spread of hues
+    # Saturation and lightness are set for high saturation and medium brightness
+    saturation = 100  # Fully saturated
+    lightness = 50    # Medium lightness for vivid color
+    r, g, b = colorsys.hls_to_rgb(
+        hue / 360.0, lightness / 100.0, saturation / 100.0)
+    return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
 
 
-def generate_mission(linestring, index, altitude, name_template, rtx_height, rtx_speed, rtx_wait):
+def gdfs_to_json(*gdfs):
+    features = []
+    for gdf in gdfs:
+        for _, row in gdf.iterrows():
+            properties = {key: value for key, value in row.items(
+            ) if key != 'geometry' and pd.notnull(value)}
+            feature = {
+                "type": "Feature",
+                "properties": properties,
+                "geometry": mapping(row.geometry)
+            }
+            features.append(feature)
+    result = {
+        "type": "FeatureCollection",
+        "features": features
+    }
+    geojson_str = json.dumps(result)
+    return geojson_str
+
+
+def simplestyle_style_function(feature):
+    """
+    Style function for GeoJSON Simplestyle properties.
+    Parameters:
+        - feature: A single GeoJSON feature.
+    Returns:
+        - A dictionary with style attributes for Folium.
+    """
+    # Extract properties
+    properties = feature.get('properties', {})
+
+    # Simplestyle properties
+    stroke = properties.get('stroke', '#3388ff')  # Default blue
+    stroke_width = properties.get('stroke-width', 2)
+    stroke_opacity = properties.get('stroke-opacity', 1.0)
+    fill = properties.get('fill', '#3388ff')  # Default blue
+    fill_opacity = properties.get('fill-opacity', 0.2)
+
+    return {
+        'color': stroke,
+        'weight': stroke_width,
+        'opacity': stroke_opacity,
+        'fillColor': fill,
+        'fillOpacity': fill_opacity,
+    }
+
+
+def compute_mission_duration(
+    mission_path: LineString,
+    altitude: float,
+    horizontal_speed_meters_per_second: float,
+    time_lost_per_waypoint_seconds=6.0,
+    ascent_speed_meters_per_second=8.0,
+    descent_speed_meters_per_second=6.0,
+) -> Union[float, None]:
+    """
+    Compute the duration of a mission given the speed and altitude.
+    """
+    if mission_path is None:
+        return None
+    duration_travel = mission_path.length / horizontal_speed_meters_per_second
+    duration_ascent = altitude / ascent_speed_meters_per_second
+    duration_descent = altitude / descent_speed_meters_per_second
+    duration_waypoints = len(mission_path.coords) * \
+        time_lost_per_waypoint_seconds
+    return duration_travel + duration_ascent + duration_descent + duration_waypoints
+
+
+def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
+    linestring = row.geometry
     with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
         mission_proto = json.load(mission_proto_file)
-        mission_proto["displayName"] = name_template.format(
-            index=index, date=datetime.now().isoformat())
+        mission_proto["displayName"] = row.get("name")
         mission_proto["templateUuid"] = str(uuid.uuid4())
         mission_proto["rtxSettings"]["minimumHeight"] = rtx_height
         mission_proto["rtxSettings"]["speed"] = rtx_speed
@@ -228,34 +239,263 @@ def generate_mission(linestring, index, altitude, name_template, rtx_height, rtx
         return json.dumps(mission_proto, indent=2)
 
 
-mission_file = st.file_uploader(
-    "Upload a geojson file (from geojson.io) with one polygon of the entire city boundary that you want to scan", type=["json", "geojson"])
+@st.cache_data
+def preprocess(geojson_file) -> pd.DataFrame:
+    preprocess_progress_bar = st.progress(0, text="Loading File")
 
-name_template = st.text_input(
-    "Mission name template:", value="LTE Scan - {index} - {date}")
+    df = gpd.read_file(geojson_file)
 
-with st.expander("Mission Planning Parameters"):
-    passes = st.multiselect(
-        "Which scan passes do you want to fly?",
-        ["North-South", "East-West"],
-        ["North-South"],
+    preprocess_progress_bar.progress(10, text="Getting center")
+
+    center_coords = [df.geometry.iloc[0].centroid.y,
+                     df.geometry.iloc[0].centroid.x]
+
+    preprocess_progress_bar.progress(20, text="Generating Names")
+
+    # Ensure all features have a 'name' property
+    if 'name' not in df.columns:
+        df['name'] = None  # Create the column if it doesn't exist
+
+    preprocess_progress_bar.progress(40, text="Generating Launch Points Names")
+
+    # Launch Points: Filter for Points
+    launch_points_df = df[df.geometry.type == "Point"].copy()
+    # Fill missing 'name' values
+    launch_points_df['name'] = launch_points_df.apply(
+        lambda row: row['name'] if row['name'] else f"Launch Point {row.name}",
+        axis=1
+    )
+    launch_points_df['address'] = launch_points_df.apply(
+        lambda row: reverse_geocode(
+            row.geometry.y, row.geometry.x) if row.geometry else "No geometry",
+        axis=1
     )
 
+    preprocess_progress_bar.progress(60, text="Generating Scan Areas Names")
+
+    # Scan Areas: Filter for Polygons (including MultiPolygons if needed)
+    scan_areas_df = df[df.geometry.type == "Polygon"].copy()
+    # Fill missing 'name' values
+    scan_areas_df['name'] = scan_areas_df.apply(
+        lambda row: row['name'] if row['name'] else f"Scan Area {row.name}",
+        axis=1
+    )
+
+    preprocess_progress_bar.progress(100, text="Finalizing")
+    preprocess_progress_bar.empty()
+
+    return (center_coords, launch_points_df, scan_areas_df)
+
+
+@st.cache_data(show_spinner=False)
+def process(
+        geojson_file, _launch_points_df, _scan_areas_df,
+        corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch,
+        altitude, speed, max_mission_duration, name_template
+) -> pd.DataFrame:
+    process_progress_bar = st.progress(0, text="Computing projections")
+
+    # Create a local projection centered on the polygon
+    minx, miny, maxx, maxy = scan_areas_df.total_bounds
+    local_utm = pyproj.Proj(proj='utm', zone=int(
+        (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
+    wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
+    project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm)
+    project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84)
+
+    # # Apply the transformation to launch points
+    launch_points = project_df(project_to_utm, _launch_points_df)
+
+    # Apply the transformation to scan areas
+    scan_areas = project_df(project_to_utm, _scan_areas_df)
+
+    process_progress_bar.progress(10, text="Generating slices")
+
+    iteration_spacing = pass_spacing
+    slices = generate_oriented_slices(
+        scan_areas, corridor_direction, corridor_width, iteration_spacing)
+
+    process_progress_bar.progress(20, text="Generating passes")
+
+    passes = generate_passes(
+        scan_areas, pass_direction, pass_spacing)
+    if crosshatch:
+        # Add crosshatch perpendicular passes
+        passes_crosshatch = generate_passes(
+            scan_areas, pass_direction + 90, pass_spacing)
+    else:
+        passes_crosshatch = None
+
+    start_slice = 0
+    end_slice = slices.shape[0]
+
+    missions_optim = []
+    current_start = start_slice
+
+    while current_start < end_slice:
+        time.sleep(0.01)
+
+        process_progress_bar.progress(30+math.floor(70*(current_start-start_slice)/(
+            end_slice-start_slice)), text=f"Generating optimal slices {current_start-start_slice}/{end_slice-start_slice}")
+
+        # Binary search to find the best range
+        low, high = current_start + 1, end_slice
+        best_end = None
+        best_reward = float('-inf')
+
+        while low <= high:
+            mid = (low + high) // 2
+
+            (launch_point, mission_path) = compute_total_mission_path(
+                launch_points, slices, passes, passes_crosshatch, current_start, mid)
+            mission_duration = compute_mission_duration(
+                mission_path, altitude, speed)
+            reward = mid-current_start
+            # st.text(f"{current_start}, {mid}: {mission_duration}")
+
+            if mission_duration is None:  # Invalid range, increase size
+                low = mid + 1
+            elif mission_duration > max_mission_duration:  # Range too large, decrease size
+                high = mid - 1
+            else:  # Valid range, optimize for maximum reward
+                if reward > best_reward:
+                    best_launch_point = launch_point.address
+                    best_mission_path = mission_path
+                    best_mission_duration = mission_duration
+                    best_reward = reward
+                    best_end = mid
+                low = mid + 1  # Explore larger ranges
+
+        # If no valid range is found, terminate the loop
+        if best_end is None:
+            raise ValueError(
+                "No mission found for the given constraints, try making the Mission target duration longer, or add launch points, or make the scan area smaller")
+
+        # Finalize the missions
+        missions_optim.append((
+            current_start,
+            best_end,
+            best_launch_point,
+            best_mission_path,
+            best_mission_duration))
+        current_start = best_end + 1  # Update start for the next range
+
+    date_now = datetime.now().isoformat(timespec='seconds')
+
+    missions = gpd.GeoDataFrame({
+        'geometry': [mission_path for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'name': [
+            name_template.format(
+                index=index,
+                date=date_now,
+                launch_point=launch_point,
+                start=start,
+                end=end,
+                duration=math.ceil(mission_duration)
+            ) for index, (start, end, launch_point, mission_path, mission_duration)
+            in enumerate(missions_optim)],
+        'launch_point': [launch_point for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'start': [start for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'end': [end for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'duration': [math.ceil(mission_duration) for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'stroke': [generate_random_saturated_color(i) for i in range(len(missions_optim))],
+        'stroke-width': [2 for i in range(len(missions_optim))],
+        'index': [i for i in range(len(missions_optim))]
+    },
+        crs=scan_areas.crs)
+
+    process_progress_bar.progress(100, text="Finalizing")
+    time.sleep(1.0)
+    process_progress_bar.empty()
+
+    return (
+        project_df(project_to_wgs84, scan_areas),
+        project_df(project_to_wgs84, launch_points),
+        project_df(project_to_wgs84, passes),
+        project_df(project_to_wgs84, passes_crosshatch),
+        project_df(project_to_wgs84, missions)
+    )
+
+
+###############################################################################
+st.markdown("# 📶 LTE Survey Mission Generator")
+
+###############################################################################
+st.markdown("## 1. Upload input file")
+
+geojson_file = st.file_uploader(
+    "Upload a geojson file (e.g. from geojson.io) containing polygons covering the area you want to scan and points representing launch/land locations:",
+    type=["json", "geojson"])
+
+if geojson_file is None:
+    st.stop()
+
+(center_coords, launch_points_df, scan_areas_df) = preprocess(geojson_file)
+
+with st.expander("View map of scan areas and launch points"):
+    m = folium.Map(location=center_coords, zoom_start=12)
+    folium.GeoJson(
+        pd.concat([launch_points_df, scan_areas_df]),
+        style_function=simplestyle_style_function,
+        popup=GeoJsonPopup(
+            fields=["name"],
+            aliases=["Name"],
+            localize=True,
+            labels=True,
+            style="background-color: yellow;",
+        ),
+    ).add_to(m)
+    st_folium(m, width=700, height=500, return_on_hover=False)
+
+###############################################################################
+st.markdown("## 2. Customize parameters")
+
+name_template = st.text_input(
+    "Mission name template:", value="LTE Scan | {date} | {launch_point} | #{index} | {duration}s")
+
+with st.expander("Mission Planning Parameters"):
+
     st.markdown(
-        "We split that polygon into many separate squares, each representing a mission to fly")
-    square_size = st.number_input(
-        "Size of mission squares, in meter:", min_value=100, value=600)
+        """
+        We generate a lawnmower pattern to scan the area with a given spacing between passes.
+        We slice the scan area into separate corridors of specified width, along the first pass axis.
+        For each corridor, we then slice it again into separate slices across the first pass axis.
+        We compute the size of each slice such that each mission is as long as possible, but no more than target duration.
+        We then fly the drone at specific speed and altitude along these passes.
+        """)
+
+    max_mission_duration = st.number_input(
+        "Target mission duration, in seconds:", min_value=0, value=20*60)
     st.markdown(
-        f"Square size = {square_size:.0f}m = {square_size*3.28084:.0f}ft = {square_size*1.09361:.0f}yd = {square_size/1609:.2f} Miles = {square_size/1852:.2f} Nautical Miles")
+        f"Mission duration = {max_mission_duration:.0f}s = {max_mission_duration/60:.0f}min{max_mission_duration%60:.0f}s")
+
+    corridor_width = st.number_input(
+        "Width of mission corridors, in meters:", min_value=100, value=800)
     st.markdown(
-        "For each square, we generate a lawnmower pattern to scan the area with a given spacing between passes")
-    spacing = st.number_input(
-        "Spacing between passes in meters:", min_value=10, value=50)
+        f"Width = {corridor_width:.0f}m = {corridor_width*3.28084:.0f}ft = {corridor_width*1.09361:.0f}yd = {corridor_width/1609:.2f} Miles = {corridor_width/1852:.2f} Nautical Miles")
+
+    corridor_direction = st.number_input(
+        "Direction of mission corridors, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=90)
     st.markdown(
-        f"Spacing = {spacing:.0f}m = {spacing*3.28084:.0f}ft = {spacing*1.09361:.0f}yd = {spacing/1609:.2f} Miles = {spacing/1852:.2f} Nautical Miles")
+        f"Corridor Direction = {corridor_direction:.0f}deg")
+
+    pass_spacing = st.number_input(
+        "Spacing between passes in meters:", min_value=10, value=100)
+    st.markdown(
+        f"Spacing = {pass_spacing:.0f}m = {pass_spacing*3.28084:.0f}ft = {pass_spacing*1.09361:.0f}yd = {pass_spacing/1609:.2f} Miles = {pass_spacing/1852:.2f} Nautical Miles")
+
+    pass_direction = st.number_input(
+        "Direction of mission passes, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=0)
+    st.markdown(
+        f"Passes Direction = {pass_direction:.0f}deg")
+
+    pass_crosshatch = st.checkbox(
+        "Crosshatch passes", value=False)
+    st.markdown(
+        f"Crosshatch pass = {'Yes' if pass_crosshatch else 'No'}")
 
     speed = st.number_input(
-        "Flight speed in meters per second:", min_value=0, value=14)
+        "Flight speed in meters per second:", min_value=0, value=16)
     st.markdown(
         f"Flight speed = {speed:.0f}m/s = {speed*3.6:.1f}km/h = {speed*3600/1609:.1f}Mph = {speed*3600/1852:.1f}kts")
 
@@ -265,13 +505,14 @@ with st.expander("Mission Planning Parameters"):
         f"Altitude = {altitude:.0f}m = {altitude*3.28084:.0f}ft = {altitude*1.09361:.0f}yd = {altitude/1609:.2f} Miles = {altitude/1852:.2f} Nautical Miles")
 
 with st.expander("Return Settings"):
+
     rtx_height = st.number_input(
         "Return Height in meters:", min_value=10, value=61)
     st.markdown(
         f"Return Height = {rtx_height:.0f}m = {rtx_height*3.28084:.0f}ft = {rtx_height*1.09361:.0f}yd = {rtx_height/1609:.2f} Miles = {rtx_height/1852:.2f} Nautical Miles")
 
     rtx_speed = st.number_input(
-        "Return Speed in meters per second:", min_value=0, value=14)
+        "Return Speed in meters per second:", min_value=0, value=16)
     st.markdown(
         f"Return Speed = {rtx_speed:.0f}m/s = {rtx_speed*3.6:.1f}km/h = {rtx_speed*3600/1609:.1f}Mph = {rtx_speed*3600/1852:.1f}kts")
 
@@ -280,144 +521,190 @@ with st.expander("Return Settings"):
     st.markdown(
         f"Wait Before Return on Lost Connection = {rtx_wait:.0f}s = {rtx_wait/60:.0f}min{rtx_wait%60:.0f}s")
 
-with st.expander("Cost Estimation Parameters"):
-    cost_fixed = st.number_input(
-        "Fixed base cost for the whole program:", min_value=0, value=5000)
+# with st.expander("Cost Estimation Parameters"):
+#     cost_fixed = st.number_input(
+#         "Fixed base cost for the whole program:", min_value=0, value=5000)
 
-    cost_per_flight = st.number_input(
-        "Fixed cost per flight mission:", min_value=0, value=100)
+#     cost_per_flight = st.number_input(
+#         "Fixed cost per flight mission:", min_value=0, value=100)
 
-    cost_per_flight_hour = st.number_input(
-        "Variable cost per flight hour:", min_value=0, value=50)
+#     cost_per_flight_hour = st.number_input(
+#         "Variable cost per flight hour:", min_value=0, value=50)
 
-mission_length = (  # horizontal passes
-    square_size *  # length of each leg
-    math.ceil(square_size/spacing)  # number of legs
-    + square_size  # total length of transitions between legs
-) + (  # vertical passes
-    square_size *  # length of each leg
-    math.ceil(square_size/spacing)  # number of legs
-    + square_size  # total length of transitions between legs
-) + (
-    square_size  # go to start
-) + (
-    square_size  # return to base
+
+###############################################################################
+st.markdown("## 3. Compute missions")
+
+(
+    scan_areas,
+    launch_points,
+    passes,
+    passes_crosshatch,
+    missions
+) = process(
+    geojson_file,
+    launch_points_df,
+    scan_areas_df,
+    corridor_direction,
+    corridor_width,
+    pass_direction,
+    pass_spacing,
+    pass_crosshatch,
+    altitude,
+    speed,
+    max_mission_duration,
+    name_template
 )
 
-mission_duration = (
-    mission_length/speed  # time moving
-    + math.ceil(square_size/spacing) * 4  # number of waypoints
-    * 6.0  # time lost at each waypoints (slowing, stopped, accelerating)
+with st.expander("View map of missions", expanded=True):
+
+    mission_geojson_data = gdfs_to_json(
+        scan_areas, launch_points, missions).encode('utf-8')
+
+    st.download_button(
+        label="Download as GeoJSON file",
+        icon="🗺️",
+        data=mission_geojson_data,
+        file_name="missions.geojson",
+        mime="application/json",
+    )
+
+    m = folium.Map(location=center_coords, zoom_start=12)
+    folium.GeoJson(
+        scan_areas,
+        style_function=simplestyle_style_function,
+        # style_function=lambda x: {"color": "#000000", "weight": 3},
+        # popup=GeoJsonPopup(
+        #     fields=["name"],
+        #     aliases=["Name"],
+        #     localize=True,
+        #     labels=True,
+        #     style="background-color: yellow;",
+        # ),
+    ).add_to(m)
+    folium.GeoJson(
+        launch_points,
+        style_function=simplestyle_style_function,
+        # style_function=lambda x: {"color": "#0000ff", "weight": 3},
+        popup=GeoJsonPopup(
+            fields=["name", "address"],
+            aliases=["Name", "Address"],
+            localize=True,
+            labels=True,
+            style="background-color: yellow;",
+        ),
+    ).add_to(m)
+    # folium.GeoJson(
+    #     corridors,
+    #     style_function=lambda x: {"color": "#ff0000", "weight": 2}
+
+    # ).add_to(m)
+
+    # folium.GeoJson(
+    #     passes,
+    #     style_function=lambda x: {"color": "#00ff00", "weight": 1}
+    # ).add_to(m)
+    # if passes_crosshatch is not None:
+    #     folium.GeoJson(
+    #         passes_crosshatch,
+    #         style_function=lambda x: {"color": "#00ff00", "weight": 1}
+    #     ).add_to(m)
+
+    folium.GeoJson(
+        missions,
+        # style_function=lambda x: {
+        #     "color": x['properties']["stroke"],
+        #     "weight": x['properties']["stroke-width"]
+        # },
+        style_function=simplestyle_style_function,
+        popup=GeoJsonPopup(
+            fields=["name", "index", "launch_point",
+                    "duration", "start", "end"],
+            aliases=["Mission Name", "Mission Number", "Launch Point",
+                     "Duration", "Start Slice", "End Slice"],
+            localize=True,
+            labels=True,
+            style="background-color: yellow;",
+        ),
+    ).add_to(m)
+
+    st_folium(m, width=700, height=500, return_on_hover=False)
+
+with st.expander("View missions details", expanded=False):
+
+    mission_duration_chart = alt.Chart(missions).mark_bar().encode(
+        x=alt.X("duration", bin=alt.Bin(maxbins=100, extent=[0, max_mission_duration*1.2]),
+                title=f"Mission duration"),
+        y=alt.Y('count()', title='Number of Missions')
+    ).properties(
+        title=f"Histogram of missions durations",
+        width=600,
+        height=400
+    )
+    st.altair_chart(mission_duration_chart, use_container_width=True)
+
+    launch_point_chart = alt.Chart(missions).mark_bar().encode(
+        x=alt.X('launch_point:N', title='Mission Launch Point', axis=alt.Axis(
+            labelAngle=-45,  # Rotate labels for better readability
+            labelOverlap=False,  # Avoid overlapping labels
+            labelLimit=200,  # Increase the maximum length of labels
+            labelAlign='right'  # Align labels to avoid truncation
+        )),
+        y=alt.Y('count()', title='Number of Missions'),
+        tooltip=['launch_point', 'count()']  # Tooltip for more information
+    ).properties(
+        title="Histogram of missions per launch point",
+        width=600,
+        height=400
+    )
+    st.altair_chart(launch_point_chart, use_container_width=True)
+
+###############################################################################
+st.markdown("## 4. Get Missions")
+
+
+missions_protos_json = [
+    generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait)
+    for i, row in missions.iterrows()
+]
+
+# Create an in-memory bytes buffer to hold the ZIP file
+zip_buffer = io.BytesIO()
+with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+    for i, mission_proto_json in enumerate(missions_protos_json):
+        filename = f"mission_{i}.json"
+        zip_file.writestr(filename, mission_proto_json)
+# Seek to the beginning of the BytesIO buffer
+zip_buffer.seek(0)
+# Provide the ZIP file for download
+st.download_button(
+    label="Download zip file of all missions.json",
+    icon="🗄️",
+    data=zip_buffer,
+    file_name="missions.zip",
+    mime="application/zip"
 )
 
-if mission_file is not None:
-    content = mission_file.read()
-    geojson = json.loads(content)
-    input_polygon = shape(geojson.get('features')[0].get('geometry'))
+with st.expander("Skydio Cloud settings", expanded=False):
 
-    squares = split_polygon_into_squares(input_polygon, size=square_size)
+    cloud_api_url = st.text_input(
+        "Cloud API URL", value="https://api.skydio.com/api/v0/mission_document/template")
+    api_key = st.text_input("API Token", type="password")
 
-    if mission_duration > 1800:
-        st.markdown(
-            "🔴 :red[**Missions are longer than 30 minutes! They probably are not going to be flyable**]")
-    elif mission_duration > 1500:
-        st.markdown(
-            "🟡 :orange[**Missions are in the 25-30minutes range. This is ok but leaves little margin. Some mission might not finish completely in one battery.**]")
-    elif mission_duration > 900:
-        st.markdown(
-            "🟢 :green[**Missions are in the 15-25minutes range. This is ideal**]")
-    elif mission_duration > 600:
-        st.markdown(
-            "🟡 :orange[**Missions are in the 10-15minutes range. This is ok but a little bit on the short range. Try making larger missions**]")
-    else:
-        st.markdown(
-            "🔴 :red[**Missions are shorter than 10 minutes! This is very short and will add operational overhead, try making larger missions.**]")
-    st.markdown(f"Total number of missions to fly: {len(squares)}")
-    st.markdown(
-        f"Length of each mission = {mission_length:.0f}m = {mission_length*3.28084:.0f}ft = {mission_length*1.09361:.0f}yd = {mission_length/1609:.2f} Miles = {mission_length/1852:.2f} Nautical Miles")
-    st.markdown(
-        f"Duration of each mission = {mission_duration:.0f}s = {mission_duration/60:.0f}min")
-    st.markdown(
-        f"Total flight hours (Conservative) = {len(squares)*mission_duration/3600:.0f}h")
-    st.markdown(
-        f"Total cost = ${cost_fixed + (len(squares) * (cost_per_flight + (mission_duration/3600)* cost_per_flight_hour)) :,.0f}")
 
-    with st.expander("See geojson with all mission squares"):
-        result_squares_geojson = {
-            "type": "FeatureCollection",
-            "features": [{"type": "Feature", "properties": {"mission_number": i+1}, "geometry": mapping(square)} for i, square in enumerate(squares)]
-        }
-        st.code(json.dumps(result_squares_geojson, indent=2), language='json')
-
-    with st.expander("See geojson for a given mission"):
-        input_square_index = st.number_input("Index of mission to view",
-                                             min_value=1, max_value=len(squares), value=1)
-        input_square = squares[input_square_index-1]
-        lawnmower_pattern = generate_lawnmower_pattern(
-            input_square, spacing=spacing, passes=passes)
-        result_geojson = {
-            "type": "FeatureCollection",
-            "features": [{"type": "Feature", "properties": {}, "geometry": mapping(lawnmower_pattern)}]
-        }
-        st.code(json.dumps(result_geojson, indent=2), language='json')
-
-    with st.expander("Get mission json for a given mission"):
-        input_square_index = st.number_input("Index of mission to get",
-                                             min_value=1, max_value=len(squares), value=1)
-        input_square = squares[input_square_index-1]
-        lawnmower_pattern = generate_lawnmower_pattern(
-            input_square, spacing=spacing, passes=passes)
-
-        if st.button("Generate File"):
-            mission_json_data = generate_mission(
-                lawnmower_pattern, input_square_index, altitude, name_template, rtx_height, rtx_speed, rtx_wait)
-
-            st.download_button(
-                label="Download mission.json",
-                data=mission_json_data,
-                file_name="mission.json",
-                mime="application/json",
-            )
-
-    with st.expander("Get all missions json"):
-
-        if st.button("Generate zip file of all missions"):
-            # Create an in-memory bytes buffer to hold the ZIP file
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                for i, square in enumerate(squares, start=1):
-                    lawnmower_pattern = generate_lawnmower_pattern(
-                        square, spacing=spacing, passes=passes)
-                    if lawnmower_pattern.is_empty:
-                        continue
-                    mission_json_data = generate_mission(
-                        lawnmower_pattern, i, altitude, name_template, rtx_height, rtx_speed, rtx_wait)
-                    # Write the mission JSON data into the ZIP file
-                    filename = f"mission_{i}.json"
-                    zip_file.writestr(filename, mission_json_data)
-
-            # Seek to the beginning of the BytesIO buffer
-            zip_buffer.seek(0)
-            # Provide the ZIP file for download
-            st.download_button(
-                label="Download zip file",
-                data=zip_buffer,
-                file_name="missions.zip",
-                mime="application/zip"
-            )
-
-    with st.expander("Upload all missions to Skydio Cloud"):
-        api_key = st.text_input("Enter your API key", type="password")
+if api_key is not None and cloud_api_url is not None and cloud_api_url != "" and api_key != "" and len(missions_protos_json) > 0:
+    if st.button("Upload all missions to Skydio Cloud", icon="🚀"):
+        upload_progress_bar = st.progress(0.0, text="Uploading missions")
 
         async def upload_mission(session, request_url, headers, mission_json_data, i):
+            upload_progress_bar.progress(
+                i/len(missions_protos_json), text=f"Uploading missions ({i}/{len(missions_protos_json)})")
             response = await session.post(request_url, headers=headers, data=mission_json_data)
             if response.status_code != 200:
                 return f"Mission {i}: {response.text}"
             return None
 
         async def upload_missions():
-            request_url = "https://cloudapi--main--ws-staging--vikram-khandelwal.coder.dev.skyd.io/api/v0/mission_document/template"
-
             headers = {
                 "Authorization": f"{api_key}",
                 "Content-Type": "application/json"
@@ -426,15 +713,9 @@ if mission_file is not None:
 
             async with httpx.AsyncClient() as session:
                 tasks = []
-                for i, square in enumerate(squares, start=1):
-                    lawnmower_pattern = generate_lawnmower_pattern(
-                        square, spacing=spacing, passes=passes)
-                    if lawnmower_pattern.is_empty:
-                        continue
-                    mission_json_data = generate_mission(
-                        lawnmower_pattern, i, altitude, name_template, rtx_height, rtx_speed, rtx_wait)
-                    tasks.append(upload_mission(session, request_url,
-                                                headers, mission_json_data, i))
+                for i, mission_proto_json in enumerate(missions_protos_json):
+                    tasks.append(upload_mission(session, cloud_api_url,
+                                                headers, mission_proto_json, i))
 
                 results = await asyncio.gather(*tasks)
 
@@ -442,11 +723,16 @@ if mission_file is not None:
                 if result:
                     error_messages.append(result)
 
+            upload_progress_bar.progress(100, text="Finalizing")
+            time.sleep(1.0)
+            upload_progress_bar.empty()
+
             if error_messages:
                 st.error("Errors occurred during the upload:\n" +
                          "\n".join(error_messages))
             else:
                 st.success("All missions uploaded successfully!")
-
-        if st.button("Upload Missions"):
-            asyncio.run(upload_missions())
+        asyncio.run(upload_missions())
+else:
+    st.warning(
+        "Please provide the Cloud API URL and API Token in Skydio Cloud settings above in order to upload missions")

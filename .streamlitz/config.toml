@@ -1,0 +1,5 @@
+# See https://docs.streamlit.io/develop/api-reference/configuration/config.toml#set-configuration-options
+
+[server]
+maxMessageSize = 800
+enableStaticServing = true
