@@ -640,4 +640,4 @@ def compute_total_mission_path(
                 raise ValueError("Invalid geometry type in mission passes.")
     all_coords.append(launch_point.geometry.coords[0])
     mission_path = LineString(all_coords)
-    return mission_path
+    return (launch_point, mission_path)

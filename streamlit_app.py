@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Union
 from shapely import LineString
 from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
@@ -131,7 +132,7 @@ def preprocess(geojson_file) -> pd.DataFrame:
 def process(
         geojson_file, _launch_points_df, _scan_areas_df,
         corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch,
-        altitude, speed, max_mission_duration
+        altitude, speed, max_mission_duration, name_template
 ) -> pd.DataFrame:
     process_progress_bar = st.progress(0, text="Computing projections")
 
@@ -186,7 +187,7 @@ def process(
         while low <= high:
             mid = (low + high) // 2
 
-            mission_path = compute_total_mission_path(
+            (launch_point, mission_path) = compute_total_mission_path(
                 launch_points, slices, passes, passes_crosshatch, current_start, mid)
             mission_duration = compute_mission_duration(
                 mission_path, altitude, speed)
@@ -199,6 +200,7 @@ def process(
                 high = mid - 1
             else:  # Valid range, optimize for maximum reward
                 if reward > best_reward:
+                    best_launch_point = launch_point.address
                     best_mission_path = mission_path
                     best_mission_duration = mission_duration
                     best_reward = reward
@@ -211,16 +213,34 @@ def process(
                 "No mission found for the given constraints, try making target duration larger")
 
         # Finalize the missions
-        missions_optim.append((current_start, best_end,
-                               best_mission_path, best_mission_duration))
+        missions_optim.append((
+            current_start,
+            best_end,
+            best_launch_point,
+            best_mission_path,
+            best_mission_duration))
         current_start = best_end + 1  # Update start for the next range
 
+    date_now = datetime.now().isoformat(timespec='seconds')
+
     missions = gpd.GeoDataFrame({
-        'geometry': [mission_path for (start, end, mission_path, mission_duration) in missions_optim],
-        'start': [start for (start, end, mission_path, mission_duration) in missions_optim],
-        'end': [end for (start, end, mission_path, mission_duration) in missions_optim],
-        'duration': [mission_duration for (start, end, mission_path, mission_duration) in missions_optim],
-        'color': [generate_random_saturated_color(i) for i in range(len(missions_optim))]
+        'geometry': [mission_path for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'name': [
+            name_template.format(
+                index=index,
+                date=date_now,
+                launch_point=launch_point,
+                start=start,
+                end=end,
+                duration=math.ceil(mission_duration)
+            ) for index, (start, end, launch_point, mission_path, mission_duration)
+            in enumerate(missions_optim)],
+        'launch_point': [launch_point for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'start': [start for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'end': [end for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'duration': [math.ceil(mission_duration) for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'color': [generate_random_saturated_color(i) for i in range(len(missions_optim))],
+        'index': [i for i in range(len(missions_optim))]
     },
         crs=scan_areas.crs)
 
@@ -258,7 +278,7 @@ with st.expander("View map of scan areas and launch points"):
         pd.concat([launch_points_df, scan_areas_df]),
         popup=GeoJsonPopup(
             fields=["name"],
-            aliases=["Name:"],
+            aliases=["Name"],
             localize=True,
             labels=True,
             style="background-color: yellow;",
@@ -270,7 +290,7 @@ with st.expander("View map of scan areas and launch points"):
 st.markdown("## 2. Customize parameters")
 
 name_template = st.text_input(
-    "Mission name template:", value="LTE Scan - {date} - {index}")
+    "Mission name template:", value="LTE Scan | {date} | {launch_point} | #{index} | {duration}s")
 
 with st.expander("Mission Planning Parameters"):
 
@@ -384,7 +404,8 @@ st.markdown("## 3. Compute missions")
     pass_crosshatch,
     altitude,
     speed,
-    max_mission_duration
+    max_mission_duration,
+    name_template
 )
 
 with st.expander("View map of missions", expanded=True):
@@ -392,20 +413,20 @@ with st.expander("View map of missions", expanded=True):
     folium.GeoJson(
         scan_areas,
         style_function=lambda x: {"color": "#000000", "weight": 3},
-        popup=GeoJsonPopup(
-            fields=["name"],
-            aliases=["Name:"],
-            localize=True,
-            labels=True,
-            style="background-color: yellow;",
-        ),
+        # popup=GeoJsonPopup(
+        #     fields=["name"],
+        #     aliases=["Name"],
+        #     localize=True,
+        #     labels=True,
+        #     style="background-color: yellow;",
+        # ),
     ).add_to(m)
     folium.GeoJson(
         launch_points,
         style_function=lambda x: {"color": "#0000ff", "weight": 3},
         popup=GeoJsonPopup(
             fields=["name", "address"],
-            aliases=["Name:", "Address:"],
+            aliases=["Name", "Address"],
             localize=True,
             labels=True,
             style="background-color: yellow;",
@@ -431,13 +452,15 @@ with st.expander("View map of missions", expanded=True):
         missions,
         style_function=lambda x: {
             "color": x['properties']["color"], "weight": 2},
-        # popup=GeoJsonPopup(
-        #     fields=["name"],
-        #     aliases=["Name:"],
-        #     localize=True,
-        #     labels=True,
-        #     style="background-color: yellow;",
-        # ),
+        popup=GeoJsonPopup(
+            fields=["name", "index", "launch_point",
+                    "duration", "start", "end"],
+            aliases=["Name", "Number", "Launch",
+                     "Duration", "Start", "End"],
+            localize=True,
+            labels=True,
+            style="background-color: yellow;",
+        ),
     ).add_to(m)
     st_folium(m, width=700, height=500, return_on_hover=False)
 
