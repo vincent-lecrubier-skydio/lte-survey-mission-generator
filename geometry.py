@@ -464,29 +464,75 @@ def compute_mission_passes(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, p
     return (mission_passes, mission_crosshatch_passes)
 
 
-def compute_closest_launch_point(launch_points: gpd.GeoDataFrame, mission_start, mission_end):
+def compute_optimal_mission_configuration(
+        launch_points: gpd.GeoDataFrame,
+        mission_passes_left: gpd.GeoSeries,
+        mission_passes_right: gpd.GeoSeries,
+        mission_crosshatch_passes_left: gpd.GeoSeries,
+        mission_crosshatch_passes_right: gpd.GeoSeries
+) -> Tuple[gpd.GeoDataFrame, gpd.GeoSeries, gpd.GeoSeries]:
     """
-    Compute the closest launch point to the mission path. 
-    The point must minimize the distance to the first point of mission path and last point of mission path.
-    mission_path_df is a GeoDataFrame containing the mission path as many LineString
+    Finds the optimal mission configuration (launch point and mission passes)
+    Given the launch points and left and right hands mission passes geometries
     """
 
-    # Compute the distance between each launch point and the start and end points of the mission path
-    distances = launch_points.distance(
-        mission_start) + launch_points.distance(mission_end)
+    if mission_crosshatch_passes_left is None or mission_crosshatch_passes_right is None:
+        configurations = [[mission_passes_left], [mission_passes_right]]
+    else:
+        configurations = [
+            [mission_passes_left, mission_crosshatch_passes_left],
+            [mission_passes_left, mission_crosshatch_passes_right],
+            [mission_passes_right, mission_crosshatch_passes_left],
+            [mission_passes_right, mission_crosshatch_passes_right]
+        ]
 
-    # Find the launch point with the minimum distance
-    closest_launch_point = launch_points.iloc[distances.idxmin()]
-    # closest_launch_point = launch_points[distances.idxmin()]
+    min_distance = float('inf')
+    argmin_distance = None
+    for config in configurations:
+        mission_start, mission_end = get_start_end_points(config)
+        transition_distance = get_transitions_distance(config)
+        for launch_point in launch_points.itertuples():
+            # Compute the distance between the launch point and the start and end points of the mission path
+            distance = launch_point.geometry.distance(
+                mission_start) + launch_point.geometry.distance(mission_end) + transition_distance
+            if distance < min_distance:
+                min_distance = distance
+                argmin_distance = (
+                    launch_point, config[0], config[1] if len(config) > 1 else None)
 
-    return closest_launch_point
+    return argmin_distance
 
 
-def get_start_end_points(gdf):
+def get_transitions_distance(gdfs: list[gpd.GeoSeries]) -> float:
+    """
+    Compute the sum of distances between the end point of each geometry and the start point of the next
+    """
+    transitions_distance = 0
+    for idx, gdf in enumerate(gdfs[:-1]):
+        # Get the end point of the current geometry
+        if gdf.geom_type == 'LineString':
+            end_point = Point(gdf.coords[-1])
+        elif gdf.geom_type == 'MultiLineString':
+            end_point = Point(gdf.geoms[-1].coords[-1])
+        else:
+            raise ValueError("Invalid geometry type in mission passes.")
+        # Get the start point of the next geometry
+        if gdfs[idx+1].geom_type == 'LineString':
+            start_point = Point(gdfs[idx+1].coords[0])
+        elif gdfs[idx+1].geom_type == 'MultiLineString':
+            start_point = Point(gdfs[idx+1].geoms[0].coords[0])
+        else:
+            raise ValueError("Invalid geometry type in mission passes.")
+        # Compute the distance between the end point of the current geometry and the start point of the next
+        transitions_distance += end_point.distance(start_point)
+    return transitions_distance
+
+
+def get_start_end_points(gdfs: list[gpd.GeoSeries]) -> Tuple[Point, Point]:
     # Get the geometry of the first row
-    first_geom = gdf.iloc[0]
+    first_geom = gdfs[0].iloc[0]
     # Get the geometry of the last row
-    last_geom = gdf.iloc[-1]
+    last_geom = gdfs[-1].iloc[-1]
 
     # Get the starting point of the first geometry
     if first_geom.geom_type == 'LineString':
@@ -538,11 +584,12 @@ def compute_total_mission_path(launch_points: gpd.GeoDataFrame, slices: gpd.GeoD
             reverse_geometry(geom) if geom and idx % 2 == 1 else geom
             for idx, geom in enumerate(mission_crosshatch_passes)
         ])
+    else:
+        mission_crosshatch_passes_left = None
+        mission_crosshatch_passes_right = None
 
-    (mission_start, mission_end) = get_start_end_points(mission_passes)
-
-    closest_launch_point = compute_closest_launch_point(
-        launch_points, mission_start, mission_end)
+    (launch_point, mission_passes_optimal, mission_crosshatch_passes_optimal) = compute_optimal_mission_configuration(
+        launch_points, mission_passes_left, mission_passes_right, mission_crosshatch_passes_left, mission_crosshatch_passes_right)
 
     # Recreate the full mission path by:
     # 1. Adding the launch point to the start of the mission path
@@ -550,8 +597,8 @@ def compute_total_mission_path(launch_points: gpd.GeoDataFrame, slices: gpd.GeoD
     # 3. Adding the launch point to the end of the mission path
     # And then merging the segments
     all_coords = []
-    all_coords.append(closest_launch_point.geometry.coords[0])
-    for idx, geometry in mission_passes.items():
+    all_coords.append(launch_point.geometry.coords[0])
+    for idx, geometry in mission_passes_optimal.items():
         if geometry.geom_type == "LineString":
             all_coords.extend(geometry.coords)
         elif geometry.geom_type == "MultiLineString":
@@ -559,8 +606,16 @@ def compute_total_mission_path(launch_points: gpd.GeoDataFrame, slices: gpd.GeoD
                 all_coords.extend(line.coords)
         else:
             raise ValueError("Invalid geometry type in mission passes.")
-    all_coords.append(closest_launch_point.geometry.coords[0])
-    # print(all_coords)
+    if mission_crosshatch_passes_optimal is not None:
+        for idx, geometry in mission_crosshatch_passes_optimal.items():
+            if geometry.geom_type == "LineString":
+                all_coords.extend(geometry.coords)
+            elif geometry.geom_type == "MultiLineString":
+                for line in geometry.geoms:
+                    all_coords.extend(line.coords)
+            else:
+                raise ValueError("Invalid geometry type in mission passes.")
+    all_coords.append(launch_point.geometry.coords[0])
     mission_path = LineString(all_coords)
     return mission_path
 
