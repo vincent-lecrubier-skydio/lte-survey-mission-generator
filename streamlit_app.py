@@ -77,8 +77,8 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
 
     process_progress_bar.progress(10, text="Generating corridors")
 
-    corridors = generate_corridors(
-        scan_areas, corridor_direction, corridor_width)
+    # corridors = generate_corridors(
+    #     scan_areas, corridor_direction, corridor_width)
 
     process_progress_bar.progress(20, text="Generating passes")
 
@@ -94,7 +94,7 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
     process_progress_bar.progress(50, text="Generating optimal missions")
 
     lawnmowers = generate_next_lawnmower(
-        scan_areas, launch_points, corridors, corridor_direction, passes, passes_crosshatch, pass_spacing)
+        scan_areas, launch_points, corridor_direction, passes, passes_crosshatch, pass_spacing)
 
     process_progress_bar.progress(100, text="Finalizing")
     time.sleep(1.0)
@@ -102,7 +102,7 @@ def process(geojson_file, _launch_points_df, _scan_areas_df, corridor_direction,
 
     return (
         project_df(project_to_wgs84, scan_areas),
-        project_df(project_to_wgs84, corridors),
+        # project_df(project_to_wgs84, corridors),
         project_df(project_to_wgs84, passes),
         project_df(project_to_wgs84, passes_crosshatch),
         project_df(project_to_wgs84, lawnmowers)
@@ -241,7 +241,7 @@ st.markdown("## 3. Compute missions")
 
 (
     scan_areas,
-    corridors,
+    # corridors,
     passes,
     passes_crosshatch,
     lawnmowers
@@ -258,34 +258,41 @@ st.markdown("## 3. Compute missions")
 
 with st.expander("View map of missions", expanded=True):
     m = folium.Map(location=center_coords, zoom_start=12)
+    folium.GeoJson(
+        scan_areas,
+        style_function=lambda x: {"color": "#0000ff", "weight": 3}
+        # popup=GeoJsonPopup(
+        #     fields=["name"],
+        #     aliases=["Name:"],
+        #     localize=True,
+        #     labels=True,
+        #     style="background-color: yellow;",
+        # ),
+    ).add_to(m)
     # folium.GeoJson(
-    #     scan_areas,
-    #     style_function=lambda x: {"color": "#0000ff", "weight": 3}
-    #     # popup=GeoJsonPopup(
-    #     #     fields=["name"],
-    #     #     aliases=["Name:"],
-    #     #     localize=True,
-    #     #     labels=True,
-    #     #     style="background-color: yellow;",
-    #     # ),
+    #     corridors,
+    #     style_function=lambda x: {"color": "#ff0000", "weight": 2}
+
     # ).add_to(m)
     folium.GeoJson(
-        corridors,
-        style_function=lambda x: {"color": "#ff0000", "weight": 2}
-
-    ).add_to(m)
-    folium.GeoJson(
         passes,
-        style_function=lambda x: {"color": "#00cc00", "weight": 1}
+        style_function=lambda x: {"color": "#00cc00", "weight": 2}
     ).add_to(m)
     if passes_crosshatch is not None:
         folium.GeoJson(
             passes_crosshatch,
-            style_function=lambda x: {"color": "#00aa00", "weight": 1}
+            style_function=lambda x: {"color": "#00aa00", "weight": 2}
         ).add_to(m)
     folium.GeoJson(
         lawnmowers,
-        style_function=lambda x: {"color": "#ff00ff", "weight": 3}
+        style_function=lambda x: {"color": "#ff00ff", "weight": 1},
+        popup=GeoJsonPopup(
+            fields=["name"],
+            aliases=["Name:"],
+            localize=True,
+            labels=True,
+            style="background-color: yellow;",
+        ),
     ).add_to(m)
     st_folium(m, width=700, height=500, return_on_hover=False)
 

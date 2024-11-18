@@ -1,3 +1,4 @@
+from shapely import MultiPolygon
 import streamlit as st
 import json
 from shapely.geometry import shape, LineString, mapping, Polygon
@@ -296,28 +297,168 @@ def move_mask_square(mask_square_template, direction_rad, centerx, centery, radi
     return mask_square
 
 
+def generate_slices(rectangle, crs, corridor_width, slice_thickness):
+    """
+    Generate polygons within a rectangle based on corridors and slices, indexed in a lawnmower pattern.
+    Computes the final polygons directly without iterating over all intermediate indices.
+
+    :param rectangle: A shapely Polygon representing the rectangle.
+    :param corridor_width: The height of each horizontal corridor.
+    :param slice_thickness: The width of each vertical slice.
+    :param start_index: Starting index of the slices to generate.
+    :param end_index: Ending index of the slices to generate.
+    :return: List of shapely Polygons for the specified indices.
+    """
+    # Get the bounds of the rectangle
+    minx, miny, maxx, maxy = rectangle.bounds
+
+    # Calculate the number of horizontal corridors and vertical slices
+    num_corridors = math.ceil((maxy - miny) / corridor_width)
+    num_slices_per_corridor = math.ceil((maxx - minx) / slice_thickness)
+
+    # Total number of cells
+    total_cells = num_corridors * num_slices_per_corridor
+
+    # Calculate polygons directly
+    result = gpd.GeoDataFrame(
+        {
+            "geometry": [None] * total_cells,
+            "name": [None] * total_cells
+        },
+        crs=crs
+    )
+    for index in range(0, total_cells):
+        # Determine the corridor and slice index
+        corridor_index = index // num_slices_per_corridor
+        slice_index_within_corridor = index % num_slices_per_corridor
+
+        # Adjust slice index for the lawnmower pattern
+        if corridor_index % 2 != 0:
+            slice_index_within_corridor = num_slices_per_corridor - \
+                1 - slice_index_within_corridor
+
+        # Calculate coordinates for the polygon
+        slice_min_x = minx + slice_index_within_corridor * slice_thickness
+        slice_max_x = min(slice_min_x + slice_thickness, maxx)
+        corridor_min_y = miny + corridor_index * corridor_width
+        corridor_max_y = min(corridor_min_y + corridor_width, maxy)
+
+        # Create the polygon
+        poly = Polygon([
+            (slice_min_x, corridor_min_y),
+            (slice_max_x, corridor_min_y),
+            (slice_max_x, corridor_max_y),
+            (slice_min_x, corridor_max_y),
+            (slice_min_x, corridor_min_y)
+        ])
+        result.at[index, "geometry"] = poly
+        result.at[index, "name"] = f"Slice {index}"
+
+    return result
+
+
+def compute_oriented_slices(polygons, direction, corridor_width, slice_thickness):
+    """
+    Compute the oriented bounding box of all polygons in a GeoDataFrame.
+
+    :param df: GeoDataFrame containing polygons.
+    :param direction: Orientation angle in degrees (counterclockwise from x-axis).
+    :return: Oriented bounding box as a Polygon.
+    """
+    # Merge all polygons into a single geometry (union)
+    combined_geom = polygons.unary_union
+
+    if isinstance(combined_geom, Polygon):
+        geometries = [combined_geom]
+    elif isinstance(combined_geom, MultiPolygon):
+        geometries = list(combined_geom.geoms)
+    else:
+        raise ValueError("Input GeoDataFrame must contain valid polygons.")
+
+    # Get the centroid of the combined geometry
+    centroid = combined_geom.centroid
+
+    # Rotate the combined geometry by the negative direction (align to x-axis)
+    rotated_geom = rotate(combined_geom, 270-direction,
+                          origin=centroid, use_radians=False)
+
+    # Create the slices in rotated space
+    slices = generate_slices(rotated_geom, polygons.crs, corridor_width,
+                             slice_thickness)
+
+    # Rotate the slices back to the original orientation
+    slices["geometry"] = slices["geometry"].apply(
+        lambda geom: rotate(geom, direction-270,
+                            origin=centroid, use_radians=False)
+    )
+    return slices
+
+
+def compute_oriented_bounding_box(polygons, direction):
+    """
+    Compute the oriented bounding box of all polygons in a GeoDataFrame.
+
+    :param df: GeoDataFrame containing polygons.
+    :param direction: Orientation angle in degrees (counterclockwise from x-axis).
+    :return: Oriented bounding box as a Polygon.
+    """
+    # Merge all polygons into a single geometry (union)
+    combined_geom = polygons.unary_union
+
+    if isinstance(combined_geom, Polygon):
+        geometries = [combined_geom]
+    elif isinstance(combined_geom, MultiPolygon):
+        geometries = list(combined_geom.geoms)
+    else:
+        raise ValueError("Input GeoDataFrame must contain valid polygons.")
+
+    # Get the centroid of the combined geometry
+    centroid = combined_geom.centroid
+
+    # Rotate the combined geometry by the negative direction (align to x-axis)
+    rotated_geom = rotate(combined_geom, -direction,
+                          origin=centroid, use_radians=False)
+
+    # Get the bounding box of the rotated geometry
+    minx, miny, maxx, maxy = rotated_geom.bounds
+
+    # Create the bounding box polygon in rotated space
+    rotated_bbox = Polygon(
+        [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy), (minx, miny)])
+
+    # Rotate the bounding box back to the original orientation
+    oriented_bbox = rotate(rotated_bbox, direction,
+                           origin=centroid, use_radians=False)
+
+    return oriented_bbox
+
+
 def compute_mission_duration(remaining_corridors, passes, passes_crosshatch, mask_square):
     pass
 
 
-def generate_next_lawnmower(scan_areas, launch_points, remaining_corridors, corridor_direction, passes, passes_crosshatch, iteration_spacing):
+def generate_next_lawnmower(scan_areas, launch_points, corridor_direction, passes, passes_crosshatch, iteration_spacing):
     """
     Generate the next lawnmower pattern
     """
 
-    radius, centerx, centery = compute_bounding_circle(scan_areas)
-    direction_rad = np.deg2rad(180+90-corridor_direction)
-    mask_square_template = Polygon([
-        (centerx+radius, centery+radius),
-        (centerx+radius, centery-radius),
-        (centerx-radius, centery-radius),
-        (centerx-radius, centery+radius),
-    ])
+    # radius, centerx, centery = compute_bounding_circle(scan_areas)
+    # direction_rad = np.deg2rad(180+90-corridor_direction)
+    # mask_square_template = Polygon([
+    #     (centerx+radius, centery+radius),
+    #     (centerx+radius, centery-radius),
+    #     (centerx-radius, centery-radius),
+    #     (centerx-radius, centery+radius),
+    # ])
 
-    mask_square = move_mask_square(
-        mask_square_template, direction_rad, centerx, centery, radius, iteration_spacing, 35)
+    # result = move_mask_square(
+    #     mask_square_template, direction_rad, centerx, centery, radius, iteration_spacing, 35)
 
-    result_gdf = gpd.GeoDataFrame(geometry=[mask_square], crs=scan_areas.crs)
+    # result = compute_oriented_bounding_box(scan_areas, corridor_direction)
+    # result_gdf = gpd.GeoDataFrame(geometry=[result], crs=scan_areas.crs)
+
+    result_gdf = compute_oriented_slices(
+        scan_areas, corridor_direction, 800, iteration_spacing)
 
     return result_gdf
 
