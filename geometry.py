@@ -460,7 +460,7 @@ def compute_mission_passes(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, p
     else:
         mission_crosshatch_passes = None
 
-    return (mission_passes, mission_crosshatch_passes)
+    return (mission_passes, mission_crosshatch_passes, merged_slices)
 
 
 def compute_optimal_mission_configuration(
@@ -581,7 +581,7 @@ def compute_total_mission_path(
     if min_slice_index >= max_slice_index:
         return (None, None)
 
-    (mission_passes, mission_crosshatch_passes) = compute_mission_passes(
+    (mission_passes, mission_crosshatch_passes, scanned_polygon) = compute_mission_passes(
         slices, passes, passes_crosshatch, min_slice_index, max_slice_index)
 
     if mission_passes.empty and (mission_crosshatch_passes is None or mission_crosshatch_passes.empty):
@@ -639,4 +639,4 @@ def compute_total_mission_path(
                 raise ValueError("Invalid geometry type in mission passes.")
     all_coords.append(launch_point.geometry.coords[0])
     mission_path = LineString(all_coords)
-    return (launch_point, mission_path)
+    return (launch_point, mission_path, scanned_polygon)

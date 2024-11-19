@@ -255,6 +255,32 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
         return json.dumps(mission_proto, indent=2)
 
 
+def compute_waypoints(missions_df):
+    """
+    Computes a DataFrame with waypoints and their range to the first point in their respective LineStrings.
+
+    Parameters:
+    - df: GeoDataFrame containing LineStrings.
+
+    Returns:
+    - A DataFrame containing the LineString index, waypoint index, waypoint coordinates, and range
+    """
+    waypoint_data = []
+    for idx, row in missions_df.iterrows():
+        geom = row.geometry
+        if geom.geom_type == 'LineString' and len(geom.coords) > 2:
+            first_point = geom.coords[0]
+            for i, point in enumerate(geom.coords[1:-1], start=1):
+                waypoint_data.append({
+                    'mission_index': idx,
+                    'waypoint_index': i,
+                    'geometry': Point(point),
+                    'range': LineString([first_point, point]).length
+                })
+
+    return gpd.GeoDataFrame(waypoint_data, geometry='geometry', crs=missions_df.crs)
+
+
 @st.cache_data(show_spinner=False)
 def preprocess(geojson_file) -> pd.DataFrame:
     preprocess_progress_bar = st.progress(0, text="Loading File")
@@ -351,7 +377,7 @@ def process(
     while current_start < end_slice:
         time.sleep(0.01)
 
-        process_progress_bar.progress(30+math.floor(70*(current_start-start_slice)/(
+        process_progress_bar.progress(30+math.floor(60*(current_start-start_slice)/(
             end_slice-start_slice)), text=f"Generating optimal slices {current_start-start_slice}/{end_slice-start_slice}")
 
         # Binary search to find the best range
@@ -362,7 +388,7 @@ def process(
         while low <= high:
             mid = (low + high) // 2
 
-            (launch_point, mission_path) = compute_total_mission_path(
+            (launch_point, mission_path, scanned_polygon) = compute_total_mission_path(
                 launch_points, slices, passes, passes_crosshatch, current_start, mid)
             mission_duration = compute_mission_duration(
                 mission_path, altitude, speed)
@@ -377,6 +403,7 @@ def process(
                 if reward > best_reward:
                     best_launch_point = launch_point
                     best_mission_path = mission_path
+                    best_mission_scanned_polygon = scanned_polygon
                     best_mission_duration = mission_duration
                     best_reward = reward
                     best_end = mid
@@ -393,13 +420,15 @@ def process(
             best_end,
             best_launch_point,
             best_mission_path,
+            scan_areas.intersection(
+                best_mission_scanned_polygon).union_all(),
             best_mission_duration))
         current_start = best_end + 1  # Update start for the next range
 
     date_now = datetime.now().isoformat(timespec='seconds')
 
     missions = gpd.GeoDataFrame({
-        'geometry': [mission_path for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'geometry': [mission_path for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
         'name': [
             name_template.format(
                 index=index,
@@ -408,19 +437,24 @@ def process(
                 start=start,
                 end=end,
                 duration=math.ceil(mission_duration)
-            ) for index, (start, end, launch_point, mission_path, mission_duration)
+            ) for index, (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration)
             in enumerate(missions_optim)],
-        'launch_point': [launch_point.name for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
-        'start': [start for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
-        'end': [end for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
-        'duration': [math.ceil(mission_duration) for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
-        'range': [max(launch_point.geometry.distance(Point(coord)) for coord in mission_path.coords) for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
-        'distance': [math.ceil(mission_duration)*speed for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'launch_point': [launch_point.name for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        'start': [start for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        'end': [end for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        'duration': [math.ceil(mission_duration) for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        'range': [max(launch_point.geometry.distance(Point(coord)) for coord in mission_path.coords) for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        'distance': [math.ceil(mission_duration)*speed for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        'area': [round(mission_scanned_polygon.area) for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
         'stroke': [generate_random_saturated_color(i) for i in range(len(missions_optim))],
         'stroke-width': [2 for i in range(len(missions_optim))],
         'index': [i for i in range(len(missions_optim))]
     },
         crs=scan_areas.crs)
+
+    process_progress_bar.progress(95, text="Computing waypoint statistics")
+
+    waypoints = compute_waypoints(missions)
 
     process_progress_bar.progress(100, text="Finalizing")
     time.sleep(1.0)
@@ -431,7 +465,8 @@ def process(
         project_df(project_to_wgs84, launch_points),
         project_df(project_to_wgs84, passes),
         project_df(project_to_wgs84, passes_crosshatch),
-        project_df(project_to_wgs84, missions)
+        project_df(project_to_wgs84, missions),
+        project_df(project_to_wgs84, waypoints)
     )
 
 
@@ -442,7 +477,11 @@ st.markdown("# 📶 LTE Survey Mission Generator")
 st.markdown("## 1. Upload input file")
 
 geojson_file = st.file_uploader(
-    "Upload a geojson file (e.g. from geojson.io) containing polygons covering the area you want to scan and points representing launch/land locations:",
+    """
+Upload a geojson file containing: Polygons covering the area you want to scan and Points representing launch/land locations.
+
+Use [geojson.io](https://geojson.io) to create your geojson files. Example valid geojson file: [san-mateo.geojson](/app/static/san-mateo.geojson)
+""",
     type=["json", "geojson"])
 
 if geojson_file is None:
@@ -551,14 +590,15 @@ with st.expander("Cost Estimation Parameters"):
 
 
 ###############################################################################
-st.markdown("## 3. Compute missions")
+st.markdown("## 3. View missions")
 
 (
     scan_areas,
     launch_points,
     passes,
     passes_crosshatch,
-    missions
+    missions,
+    waypoints
 ) = process(
     geojson_file,
     launch_points_df,
@@ -574,21 +614,30 @@ st.markdown("## 3. Compute missions")
     name_template
 )
 
-with st.expander("Overview", expanded=True):
+with st.expander("Overview Metrics", expanded=True):
     col11, col12, col13 = st.columns(3)
-    col11.metric("Total flight time", format_seconds_to_hm(
-        missions["duration"].sum()))
-    col12.metric("Total flight distance",
-                 f"{missions['distance'].sum() / 1609.0:,.0f} Miles")
-    col13.metric("Total cost",
-                 f"${cost_fixed + len(missions) * cost_per_flight + missions['duration'].sum() / 3600 * cost_per_flight_hour:,.0f}")
+    col11.metric("Number of flights", f"{len(missions):,d} flights",
+                 help="Total number of flight missions to perform in order to scan the entire area")
+    col12.metric("Total flight time", format_seconds_to_hm(
+        missions["duration"].sum()), help="Sum of all mission durations, total flight time to scan the entire area")
+    col13.metric("Total flight distance",
+                 f"{missions['distance'].sum() / 1609.0:,.0f} miles", help="Sum of all mission distances, total flight distance to scan the entire area")
 
     col21, col22, col23 = st.columns(3)
-    col21.metric("Number of flights", f"{len(missions):,d} Flights")
-    col22.metric("Launch points",
-                 f"{missions['launch_point'].nunique():,d} Points")
-    col23.metric("Max range",
-                 f"{missions['range'].max() / 1609.0:,.2f} Miles")
+    col21.metric("Total cost",
+                 f"${cost_fixed + len(missions) * cost_per_flight + missions['duration'].sum() / 3600 * cost_per_flight_hour:,.0f}", help="Total cost estimate for the entire program")
+    col22.metric("Total scanned area",
+                 f"{missions['area'].sum()/(1609*1609):,.1f} sq mi", help="Total surface area scanned by all missions")
+    col23.metric("Total waypoints",
+                 f"{len(waypoints):,d}", help="Sum of number of waypoints in all missions")
+
+    col31, col32, col33 = st.columns(3)
+    col31.metric("Launch points",
+                 f"{missions['launch_point'].nunique():,d} locations", help="Number of launch point locations effectively used in the missions")
+    col32.metric("75th percentile range",
+                 f"{waypoints['range'].quantile(0.75) / 1609.0:,.2f} miles", help="75% of flight time will be done within this distance from the launch point")
+    col33.metric("Max range",
+                 f"{waypoints['range'].max() / 1609.0:,.2f} miles", help="Maximum range from launch point reached during the furthest mission waypoint")
 
 with st.expander("Map", expanded=True):
 
@@ -596,7 +645,7 @@ with st.expander("Map", expanded=True):
         scan_areas, launch_points, missions).encode('utf-8')
 
     st.download_button(
-        label="Download as GeoJSON file",
+        label="Download as annotated GeoJSON file for later reference",
         icon="🗺️",
         data=mission_geojson_data,
         file_name="missions.geojson",
@@ -653,9 +702,9 @@ with st.expander("Map", expanded=True):
         style_function=simplestyle_style_function,
         popup=GeoJsonPopup(
             fields=["name", "index", "launch_point",
-                    "duration", "distance", "range", "start", "end"],
+                    "duration", "distance", "range", "area", "start", "end"],
             aliases=["Mission Name", "Mission Number", "Launch Point",
-                     "Duration(s)", "Distance(m)", "Range(m)", "Start Slice", "End Slice"],
+                     "Duration(s)", "Distance(m)", "Range(m)", "Area(sq m)", "Start Slice", "End Slice"],
             localize=True,
             labels=True,
             style="background-color: yellow;",
@@ -693,16 +742,27 @@ with st.expander("Analytics", expanded=False):
     )
     st.altair_chart(launch_point_chart, use_container_width=True)
 
-    range_chart = alt.Chart(missions).mark_bar().encode(
-        x=alt.X("range", bin=alt.Bin(maxbins=100, extent=[0, missions['range'].max()]),
-                title=f"Maximum range reached during mission (m)"),
-        y=alt.Y('count()', title='Number of Missions')
+    range_chart = alt.Chart(waypoints).mark_bar().encode(
+        x=alt.X("range", bin=alt.Bin(maxbins=100, extent=[0, waypoints['range'].max()]),
+                title=f"Range of waypoint (m)"),
+        y=alt.Y('count()', title='Number of waypoints')
     ).properties(
-        title=f"Histogram of missions maximum ranges",
+        title=f"Histogram of waypoint ranges from launch point",
         width=600,
         height=400
     )
     st.altair_chart(range_chart, use_container_width=True)
+
+    waypoints_chart = alt.Chart(waypoints).mark_bar().encode(
+        x=alt.X("mission_index", bin=alt.Bin(step=1, extent=[0, waypoints['mission_index'].max()+1]),
+                title=f"Mission index"),
+        y=alt.Y('count()', title='Number of waypoints')
+    ).properties(
+        title=f"Number of waypoints per mission",
+        width=600,
+        height=400
+    )
+    st.altair_chart(waypoints_chart, use_container_width=True)
 
 with st.expander("Details", expanded=False):
     stgeodataframe(missions)
