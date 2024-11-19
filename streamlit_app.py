@@ -5,7 +5,7 @@ import json
 from typing import Union
 import uuid
 import httpx
-from shapely import LineString
+from shapely import LineString, Point
 from shapely.geometry import mapping
 from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
 import streamlit as st
@@ -111,6 +111,22 @@ def simplestyle_style_function(feature):
         'fillColor': fill,
         'fillOpacity': fill_opacity,
     }
+
+
+def format_seconds_to_hm(seconds: float) -> str:
+    """
+    Format a float representing seconds into a string with hours, minutes, and seconds.
+
+    Parameters:
+        seconds (float): The number of seconds.
+
+    Returns:
+        str: The formatted string in the format 'XhYmZs'.
+    """
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    return f"{hours:d}h {minutes:d}m"
 
 
 def compute_mission_duration(
@@ -239,7 +255,7 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
         return json.dumps(mission_proto, indent=2)
 
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def preprocess(geojson_file) -> pd.DataFrame:
     preprocess_progress_bar = st.progress(0, text="Loading File")
 
@@ -261,13 +277,13 @@ def preprocess(geojson_file) -> pd.DataFrame:
     # Launch Points: Filter for Points
     launch_points_df = df[df.geometry.type == "Point"].copy()
     # Fill missing 'name' values
-    launch_points_df['name'] = launch_points_df.apply(
-        lambda row: row['name'] if row['name'] else f"Launch Point {row.name}",
-        axis=1
-    )
     launch_points_df['address'] = launch_points_df.apply(
         lambda row: reverse_geocode(
             row.geometry.y, row.geometry.x) if row.geometry else "No geometry",
+        axis=1
+    )
+    launch_points_df['name'] = launch_points_df.apply(
+        lambda row: row['name'] if row['name'] else f"Launch Point {row.name}: {row['address']}",
         axis=1
     )
 
@@ -359,7 +375,7 @@ def process(
                 high = mid - 1
             else:  # Valid range, optimize for maximum reward
                 if reward > best_reward:
-                    best_launch_point = launch_point.address
+                    best_launch_point = launch_point
                     best_mission_path = mission_path
                     best_mission_duration = mission_duration
                     best_reward = reward
@@ -388,16 +404,18 @@ def process(
             name_template.format(
                 index=index,
                 date=date_now,
-                launch_point=launch_point,
+                launch_point=launch_point.name,
                 start=start,
                 end=end,
                 duration=math.ceil(mission_duration)
             ) for index, (start, end, launch_point, mission_path, mission_duration)
             in enumerate(missions_optim)],
-        'launch_point': [launch_point for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'launch_point': [launch_point.name for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
         'start': [start for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
         'end': [end for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
         'duration': [math.ceil(mission_duration) for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'range': [max(launch_point.geometry.distance(Point(coord)) for coord in mission_path.coords) for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
+        'distance': [math.ceil(mission_duration)*speed for (start, end, launch_point, mission_path, mission_duration) in missions_optim],
         'stroke': [generate_random_saturated_color(i) for i in range(len(missions_optim))],
         'stroke-width': [2 for i in range(len(missions_optim))],
         'index': [i for i in range(len(missions_optim))]
@@ -521,15 +539,15 @@ with st.expander("Return Settings"):
     st.markdown(
         f"Wait Before Return on Lost Connection = {rtx_wait:.0f}s = {rtx_wait/60:.0f}min{rtx_wait%60:.0f}s")
 
-# with st.expander("Cost Estimation Parameters"):
-#     cost_fixed = st.number_input(
-#         "Fixed base cost for the whole program:", min_value=0, value=5000)
+with st.expander("Cost Estimation Parameters"):
+    cost_fixed = st.number_input(
+        "Fixed base cost for the whole program:", min_value=0, value=2000)
 
-#     cost_per_flight = st.number_input(
-#         "Fixed cost per flight mission:", min_value=0, value=100)
+    cost_per_flight = st.number_input(
+        "Fixed cost per flight mission:", min_value=0, value=200)
 
-#     cost_per_flight_hour = st.number_input(
-#         "Variable cost per flight hour:", min_value=0, value=50)
+    cost_per_flight_hour = st.number_input(
+        "Variable cost per flight hour:", min_value=0, value=70)
 
 
 ###############################################################################
@@ -556,7 +574,23 @@ st.markdown("## 3. Compute missions")
     name_template
 )
 
-with st.expander("View map of missions", expanded=True):
+with st.expander("Overview", expanded=True):
+    col11, col12, col13 = st.columns(3)
+    col11.metric("Total flight time", format_seconds_to_hm(
+        missions["duration"].sum()))
+    col12.metric("Total flight distance",
+                 f"{missions['distance'].sum() / 1609.0:,.0f} Miles")
+    col13.metric("Total cost",
+                 f"${cost_fixed + len(missions) * cost_per_flight + missions['duration'].sum() / 3600 * cost_per_flight_hour:,.0f}")
+
+    col21, col22, col23 = st.columns(3)
+    col21.metric("Number of flights", f"{len(missions):,d} Flights")
+    col22.metric("Launch points",
+                 f"{missions['launch_point'].nunique():,d} Points")
+    col23.metric("Max range",
+                 f"{missions['range'].max() / 1609.0:,.2f} Miles")
+
+with st.expander("Map", expanded=True):
 
     mission_geojson_data = gdfs_to_json(
         scan_areas, launch_points, missions).encode('utf-8')
@@ -619,9 +653,9 @@ with st.expander("View map of missions", expanded=True):
         style_function=simplestyle_style_function,
         popup=GeoJsonPopup(
             fields=["name", "index", "launch_point",
-                    "duration", "start", "end"],
+                    "duration", "distance", "range", "start", "end"],
             aliases=["Mission Name", "Mission Number", "Launch Point",
-                     "Duration", "Start Slice", "End Slice"],
+                     "Duration(s)", "Distance(m)", "Range(m)", "Start Slice", "End Slice"],
             localize=True,
             labels=True,
             style="background-color: yellow;",
@@ -630,11 +664,11 @@ with st.expander("View map of missions", expanded=True):
 
     st_folium(m, width=700, height=500, return_on_hover=False)
 
-with st.expander("View missions details", expanded=False):
+with st.expander("Analytics", expanded=False):
 
     mission_duration_chart = alt.Chart(missions).mark_bar().encode(
         x=alt.X("duration", bin=alt.Bin(maxbins=100, extent=[0, max_mission_duration*1.2]),
-                title=f"Mission duration"),
+                title=f"Mission duration (s)"),
         y=alt.Y('count()', title='Number of Missions')
     ).properties(
         title=f"Histogram of missions durations",
@@ -658,6 +692,20 @@ with st.expander("View missions details", expanded=False):
         height=400
     )
     st.altair_chart(launch_point_chart, use_container_width=True)
+
+    range_chart = alt.Chart(missions).mark_bar().encode(
+        x=alt.X("range", bin=alt.Bin(maxbins=100, extent=[0, missions['range'].max()]),
+                title=f"Maximum range reached during mission (m)"),
+        y=alt.Y('count()', title='Number of Missions')
+    ).properties(
+        title=f"Histogram of missions maximum ranges",
+        width=600,
+        height=400
+    )
+    st.altair_chart(range_chart, use_container_width=True)
+
+with st.expander("Details", expanded=False):
+    stgeodataframe(missions)
 
 ###############################################################################
 st.markdown("## 4. Get Missions")

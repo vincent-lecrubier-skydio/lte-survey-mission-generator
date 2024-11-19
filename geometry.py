@@ -151,9 +151,8 @@ def stgeodataframe(df):
         if "geometry" in dftodisplay.columns:
             dftodisplay["geometry"] = dftodisplay["geometry"].apply(
                 lambda x: x.wkt)
-    # st.write(dftodisplay.shape)
-    # st.write(dftodisplay.columns)
-    st.dataframe(dftodisplay)
+    st.dataframe(dftodisplay, column_order=[
+                 col for col in dftodisplay.columns.tolist() if col != "geometry"] + ["geometry"])
 
 
 def compute_bounding_circle(polygons):
