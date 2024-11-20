@@ -413,7 +413,7 @@ def process(
         if best_end is None:
             process_progress_bar.empty()
             error = ValueError(f"""
-                No mission found for the given constraints at slice {low}/{end_slice}.
+                No mission found for the given constraints at slice {low}/{end_slice}. The problematic area (Red in map below) cannot be accessed in the required time.
                 
                 Suggested fixes:
                   - Make the Mission target duration longer (in Mission planning parameters)
@@ -635,7 +635,7 @@ try:
 except ValueError as e:
     st.error(e)
 
-    with st.expander("Map Showing problematic area", expanded=True):
+    with st.expander("Map showing problematic area in red", expanded=True):
         error_geojson_data = gdfs_to_json(
             e.location, e.launch_points, e.scan_areas).encode('utf-8')
         st.download_button(
