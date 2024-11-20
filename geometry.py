@@ -579,13 +579,13 @@ def compute_total_mission_path(
     max_slice_index: int
 ) -> LineString:
     if min_slice_index >= max_slice_index:
-        return (None, None)
+        return (None, None, None)
 
     (mission_passes, mission_crosshatch_passes, scanned_polygon) = compute_mission_passes(
         slices, passes, passes_crosshatch, min_slice_index, max_slice_index)
 
     if mission_passes.empty and (mission_crosshatch_passes is None or mission_crosshatch_passes.empty):
-        return (None, None)
+        return (None, None, None)
 
     # Invert every other line to create lawnmower patterns
     mission_passes_left = gpd.GeoSeries([

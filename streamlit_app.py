@@ -409,10 +409,28 @@ def process(
                     best_end = mid
                 low = mid + 1  # Explore larger ranges
 
-        # If no valid range is found, terminate the loop
+        # If no valid range is found, terminate the loop and report problem
         if best_end is None:
-            raise ValueError(
-                "No mission found for the given constraints, try making the Mission target duration longer, or add launch points, or make the scan area smaller")
+            process_progress_bar.empty()
+            error = ValueError(f"""
+                No mission found for the given constraints at slice {low}/{end_slice}.
+                
+                Suggested fixes:
+                  - Make the Mission target duration longer (in Mission planning parameters)
+                  - Add launch points closer to the problematic areas
+                  - Make the scan area smaller
+            """)
+            problematic_slices = slices.iloc[low:low+1]
+            problematic_slices["stroke"] = "#ff0000"
+            problematic_slices["stroke-thickness"] = 3
+            problematic_slices["stroke-opacity"] = 1.0
+            problematic_slices["fill"] = "#ff0000"
+            problematic_slices["fill-opacity"] = 0.2
+            error.location = problematic_slices
+            error.launch_points = project_df(project_to_wgs84, launch_points)
+            error.scan_areas = project_df(project_to_wgs84, scan_areas)
+
+            raise error
 
         # Finalize the missions
         missions_optim.append((
@@ -592,27 +610,79 @@ with st.expander("Cost Estimation Parameters"):
 ###############################################################################
 st.markdown("## 3. View missions")
 
-(
-    scan_areas,
-    launch_points,
-    passes,
-    passes_crosshatch,
-    missions,
-    waypoints
-) = process(
-    geojson_file,
-    launch_points_df,
-    scan_areas_df,
-    corridor_direction,
-    corridor_width,
-    pass_direction,
-    pass_spacing,
-    pass_crosshatch,
-    altitude,
-    speed,
-    max_mission_duration,
-    name_template
-)
+try:
+    (
+        scan_areas,
+        launch_points,
+        passes,
+        passes_crosshatch,
+        missions,
+        waypoints
+    ) = process(
+        geojson_file,
+        launch_points_df,
+        scan_areas_df,
+        corridor_direction,
+        corridor_width,
+        pass_direction,
+        pass_spacing,
+        pass_crosshatch,
+        altitude,
+        speed,
+        max_mission_duration,
+        name_template
+    )
+except ValueError as e:
+    st.error(e)
+
+    with st.expander("Map Showing problematic area", expanded=True):
+        error_geojson_data = gdfs_to_json(
+            e.location, e.launch_points, e.scan_areas).encode('utf-8')
+        st.download_button(
+            label="Download GeoJSON file of problematic areas for further analysis",
+            icon="🗺️",
+            data=error_geojson_data,
+            file_name="missions.geojson",
+            mime="application/json",
+        )
+
+        m = folium.Map(location=center_coords, zoom_start=12)
+        folium.GeoJson(
+            e.scan_areas,
+            style_function=simplestyle_style_function,
+            popup=GeoJsonPopup(
+                fields=["name"],
+                aliases=["Name"],
+                localize=True,
+                labels=True,
+                style="background-color: yellow;",
+            ),
+        ).add_to(m)
+        folium.GeoJson(
+            e.launch_points,
+            style_function=simplestyle_style_function,
+            popup=GeoJsonPopup(
+                fields=["name", "address"],
+                aliases=["Name", "Address"],
+                localize=True,
+                labels=True,
+                style="background-color: yellow;",
+            ),
+        ).add_to(m)
+        folium.GeoJson(
+            e.location,
+            style_function=simplestyle_style_function,
+            # popup=GeoJsonPopup(
+            #     fields=["name"],
+            #     aliases=["Name"],
+            #     localize=True,
+            #     labels=True,
+            #     style="background-color: yellow;",
+            # ),
+        ).add_to(m)
+
+        st_folium(m, width=700, height=500, return_on_hover=False)
+    st.stop()
 
 with st.expander("Overview Metrics", expanded=True):
     col11, col12, col13 = st.columns(3)
