@@ -488,6 +488,12 @@ def process(
     )
 
 
+st.set_page_config(
+    page_title="LTE Survey Mission Generator",
+    page_icon="📶",
+    layout="wide"
+)
+
 ###############################################################################
 st.markdown("# 📶 LTE Survey Mission Generator")
 
@@ -888,18 +894,27 @@ if api_key is not None and cloud_api_url is not None and cloud_api_url != "" and
                 "Content-Type": "application/json"
             }
             error_messages = []
+            batch_size = 50  # Number of requests allowed per second
+            delay = 1  # Delay in seconds between batches
 
             async with httpx.AsyncClient() as session:
-                tasks = []
-                for i, mission_proto_json in enumerate(missions_protos_json):
-                    tasks.append(upload_mission(session, cloud_api_url,
-                                                headers, mission_proto_json, i))
+                for start in range(0, len(missions_protos_json), batch_size):
+                    batch = missions_protos_json[start:start + batch_size]
+                    tasks = [
+                        upload_mission(session, cloud_api_url,
+                                       headers, mission_proto_json, i)
+                        for i, mission_proto_json in enumerate(batch, start=start)
+                    ]
 
-                results = await asyncio.gather(*tasks)
+                    results = await asyncio.gather(*tasks)
 
-            for result in results:
-                if result:
-                    error_messages.append(result)
+                    for result in results:
+                        if result:
+                            error_messages.append(result)
+
+                    # Delay between batches
+                    if start + batch_size < len(missions_protos_json):
+                        await asyncio.sleep(delay)
 
             upload_progress_bar.progress(100, text="Finalizing")
             time.sleep(1.0)
