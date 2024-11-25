@@ -302,6 +302,15 @@ def preprocess(geojson_file) -> pd.DataFrame:
 
     # Launch Points: Filter for Points
     launch_points_df = df[df.geometry.type == "Point"].copy()
+    if launch_points_df is None or len(launch_points_df) <= 0:
+        preprocess_progress_bar.empty()
+        raise ValueError(f"""
+                No valid launch points found in the uploaded file.
+                
+                Suggested fixes:
+                  - Add points to the geojson file, representing launch locations
+            """)
+
     # Fill missing 'name' values
     launch_points_df['address'] = launch_points_df.apply(
         lambda row: reverse_geocode(
@@ -317,6 +326,14 @@ def preprocess(geojson_file) -> pd.DataFrame:
 
     # Scan Areas: Filter for Polygons (including MultiPolygons if needed)
     scan_areas_df = df[df.geometry.type == "Polygon"].copy()
+    if scan_areas_df is None or len(scan_areas_df) <= 0:
+        preprocess_progress_bar.empty()
+        raise ValueError(f"""
+                No valid scan areas found in the uploaded file.
+                
+                Suggested fixes:
+                  - Add polygons to the geojson file, representing areas to scan
+            """)
     # Fill missing 'name' values
     scan_areas_df['name'] = scan_areas_df.apply(
         lambda row: row['name'] if row['name'] else f"Scan Area {row.name}",
@@ -511,7 +528,11 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 if geojson_file is None:
     st.stop()
 
-(center_coords, launch_points_df, scan_areas_df) = preprocess(geojson_file)
+try:
+    (center_coords, launch_points_df, scan_areas_df) = preprocess(geojson_file)
+except ValueError as e:
+    st.error(e)
+    st.stop()
 
 with st.expander("View map of scan areas and launch points"):
     m = folium.Map(location=center_coords, zoom_start=12)
@@ -641,53 +662,54 @@ try:
 except ValueError as e:
     st.error(e)
 
-    with st.expander("Map showing problematic area in red", expanded=True):
-        error_geojson_data = gdfs_to_json(
-            e.location, e.launch_points, e.scan_areas).encode('utf-8')
-        st.download_button(
-            label="Download GeoJSON file of problematic areas for further analysis",
-            icon="🗺️",
-            data=error_geojson_data,
-            file_name="missions.geojson",
-            mime="application/json",
-        )
+    if hasattr(e, 'location'):
+        with st.expander("Map showing problematic area in red", expanded=True):
+            error_geojson_data = gdfs_to_json(
+                e.location, e.launch_points, e.scan_areas).encode('utf-8')
+            st.download_button(
+                label="Download GeoJSON file of problematic areas for further analysis",
+                icon="🗺️",
+                data=error_geojson_data,
+                file_name="missions.geojson",
+                mime="application/json",
+            )
 
-        m = folium.Map(location=center_coords, zoom_start=12)
-        folium.GeoJson(
-            e.scan_areas,
-            style_function=simplestyle_style_function,
-            popup=GeoJsonPopup(
-                fields=["name"],
-                aliases=["Name"],
-                localize=True,
-                labels=True,
-                style="background-color: yellow;",
-            ),
-        ).add_to(m)
-        folium.GeoJson(
-            e.launch_points,
-            style_function=simplestyle_style_function,
-            popup=GeoJsonPopup(
-                fields=["name", "address"],
-                aliases=["Name", "Address"],
-                localize=True,
-                labels=True,
-                style="background-color: yellow;",
-            ),
-        ).add_to(m)
-        folium.GeoJson(
-            e.location,
-            style_function=simplestyle_style_function,
-            # popup=GeoJsonPopup(
-            #     fields=["name"],
-            #     aliases=["Name"],
-            #     localize=True,
-            #     labels=True,
-            #     style="background-color: yellow;",
-            # ),
-        ).add_to(m)
+            m = folium.Map(location=center_coords, zoom_start=12)
+            folium.GeoJson(
+                e.scan_areas,
+                style_function=simplestyle_style_function,
+                popup=GeoJsonPopup(
+                    fields=["name"],
+                    aliases=["Name"],
+                    localize=True,
+                    labels=True,
+                    style="background-color: yellow;",
+                ),
+            ).add_to(m)
+            folium.GeoJson(
+                e.launch_points,
+                style_function=simplestyle_style_function,
+                popup=GeoJsonPopup(
+                    fields=["name", "address"],
+                    aliases=["Name", "Address"],
+                    localize=True,
+                    labels=True,
+                    style="background-color: yellow;",
+                ),
+            ).add_to(m)
+            folium.GeoJson(
+                e.location,
+                style_function=simplestyle_style_function,
+                # popup=GeoJsonPopup(
+                #     fields=["name"],
+                #     aliases=["Name"],
+                #     localize=True,
+                #     labels=True,
+                #     style="background-color: yellow;",
+                # ),
+            ).add_to(m)
 
-        st_folium(m, width=700, height=500, return_on_hover=False)
+            st_folium(m, width=700, height=500, return_on_hover=False)
     st.stop()
 
 with st.expander("Overview Metrics", expanded=True):
