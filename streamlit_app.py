@@ -1,29 +1,33 @@
 import asyncio
-from datetime import datetime
+import colorsys
 import io
 import json
-from typing import Union
-import uuid
-import httpx
-from shapely import LineString, Point, Polygon, MultiPolygon, MultiLineString
-from shapely.geometry import mapping
-from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
-import streamlit as st
-import pandas as pd
-import geopandas as gpd
-import numpy as np
-import pydeck as pdk
-import folium
-import time
-from folium.features import GeoJsonPopup, GeoJsonTooltip
-from streamlit_folium import st_folium
-import altair as alt
-import pyproj
-import colorsys
 import math
-import zipfile
+import time
+import uuid
 import warnings
+import zipfile
+from datetime import datetime
+from typing import List, Union
+
+import altair as alt
+import folium
+import geopandas as gpd
+import httpx
+import numpy as np
+import pandas as pd
+import pydeck as pdk
+import pyproj
 import requests
+import streamlit as st
+from folium.features import GeoJsonPopup, GeoJsonTooltip
+from shapely import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry import mapping
+from streamlit_folium import st_folium
+
+from geometry import (cleanup_names, compute_total_mission_path,
+                      generate_corridors, generate_oriented_slices,
+                      generate_passes, project_df, stgeodataframe)
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
 mapbox_token = "pk.eyJ1Ijoic2t5ZGlvLXRlYW0iLCJhIjoiY20zbW9mYmZ0MGpsMTJpcHl3bWhsbm5rcSJ9.2bTFNXUX0RrFKLiH8EgW_g"
@@ -256,15 +260,16 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
     
 def compute_scan_polygon_df(polygons: list[Union[MultiPolygon, Polygon]]) -> gpd.GeoDataFrame:
     # input type is shapely.geometry.polygon.Polygon
-    boundaries = []
+    simple_polygons: List[Polygon]= []
     for scan_polygon in polygons:
-        boundary: MultiLineString = scan_polygon.boundary
-        
-
-        boundaries.append(boundary)
+        print(scan_polygon.is_valid)
+        if isinstance(scan_polygon, MultiPolygon):
+            simple_polygons.extend(list(scan_polygon.geoms))
+        else:
+            simple_polygons.append(scan_polygon)
 
     # Convert to geodataframe
-    boundary_df = gpd.GeoDataFrame({'geometry':boundaries, 'stroke': [generate_random_saturated_color(i) for i in range(len(polygons))]})
+    boundary_df = gpd.GeoDataFrame({'geometry':simple_polygons, 'stroke': [generate_random_saturated_color(i) for i in range(len(simple_polygons))]})
 
     return boundary_df
 
@@ -805,7 +810,7 @@ with st.expander("Map", expanded=True):
         # ),
     ).add_to(m)
     folium.GeoJson(
-        scan_polygons,
+        scan_polygons.iloc[:2],
         style_function=simplestyle_style_function,
         # style_function=lambda x: {"color": "#000000", "weight": 3},
         # popup=GeoJsonPopup(
