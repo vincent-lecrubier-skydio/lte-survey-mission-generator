@@ -778,7 +778,6 @@ with st.expander("Map", expanded=True):
         scan_areas, launch_points, missions).encode('utf-8')
     
     scan_polygon_geojson_data = gdfs_to_json(scan_polygons).encode('utf-8')
-    print(scan_polygon_geojson_data)
 
     st.download_button(
         label="Download missions as annotated GeoJSON file for later reference",
@@ -810,7 +809,7 @@ with st.expander("Map", expanded=True):
         # ),
     ).add_to(m)
     folium.GeoJson(
-        scan_polygons.iloc[:2],
+        scan_polygons,
         style_function=simplestyle_style_function,
         # style_function=lambda x: {"color": "#000000", "weight": 3},
         # popup=GeoJsonPopup(
