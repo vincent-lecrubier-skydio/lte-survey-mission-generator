@@ -5,7 +5,7 @@ import json
 from typing import Union
 import uuid
 import httpx
-from shapely import LineString, Point
+from shapely import LineString, Point, Polygon, MultiPolygon, MultiLineString
 from shapely.geometry import mapping
 from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
 import streamlit as st
@@ -253,6 +253,20 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
 
         # return json string
         return json.dumps(mission_proto, indent=2)
+    
+def compute_scan_polygon_df(polygons: list[Union[MultiPolygon, Polygon]]) -> gpd.GeoDataFrame:
+    # input type is shapely.geometry.polygon.Polygon
+    boundaries = []
+    for scan_polygon in polygons:
+        boundary: MultiLineString = scan_polygon.boundary
+        
+
+        boundaries.append(boundary)
+
+    # Convert to geodataframe
+    boundary_df = gpd.GeoDataFrame({'geometry':boundaries, 'stroke': [generate_random_saturated_color(i) for i in range(len(polygons))]})
+
+    return boundary_df
 
 
 def compute_waypoints(missions_df):
@@ -368,6 +382,8 @@ def process(
     # Apply the transformation to scan areas
     scan_areas = project_df(project_to_utm, _scan_areas_df)
 
+    # print("scan_areas", scan_areas)
+
     process_progress_bar.progress(10, text="Generating slices")
 
     iteration_spacing = pass_spacing
@@ -375,6 +391,8 @@ def process(
         scan_areas, corridor_direction, corridor_width, iteration_spacing)
 
     process_progress_bar.progress(20, text="Generating passes")
+
+    # print("Slices: ", slices)
 
     passes = generate_passes(
         scan_areas, pass_direction, pass_spacing)
@@ -462,6 +480,9 @@ def process(
 
     date_now = datetime.now().isoformat(timespec='seconds')
 
+    # for i, mission in enumerate(missions_optim):
+    #     print(f"Index {i}, polygon: {mission[4]}")
+
     missions = gpd.GeoDataFrame({
         'geometry': [mission_path for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
         'name': [
@@ -489,6 +510,13 @@ def process(
 
     process_progress_bar.progress(95, text="Computing waypoint statistics")
 
+    scan_polygons_from_missions = list(map(lambda x: x[4], missions_optim))
+    # These polygons are of type 'shapely.geometry.polygon.Polygon'
+    # Convert to DF
+    scan_polygon_df = compute_scan_polygon_df(scan_polygons_from_missions)
+    # print("Polygon sample: ", scan_polygons[0])
+    # print("Type: ", type(scan_polygons[0]))
+
     waypoints = compute_waypoints(missions)
 
     process_progress_bar.progress(100, text="Finalizing")
@@ -501,7 +529,8 @@ def process(
         project_df(project_to_wgs84, passes),
         project_df(project_to_wgs84, passes_crosshatch),
         project_df(project_to_wgs84, missions),
-        project_df(project_to_wgs84, waypoints)
+        project_df(project_to_wgs84, waypoints),
+        project_df(project_to_wgs84, scan_polygon_df)
     )
 
 
@@ -643,8 +672,9 @@ try:
         launch_points,
         passes,
         passes_crosshatch,
-        missions,
-        waypoints
+        missions, # want to modify this
+        waypoints,
+        scan_polygons,
     ) = process(
         geojson_file,
         launch_points_df,
@@ -741,18 +771,41 @@ with st.expander("Map", expanded=True):
 
     mission_geojson_data = gdfs_to_json(
         scan_areas, launch_points, missions).encode('utf-8')
+    
+    scan_polygon_geojson_data = gdfs_to_json(scan_polygons).encode('utf-8')
+    print(scan_polygon_geojson_data)
 
     st.download_button(
-        label="Download as annotated GeoJSON file for later reference",
+        label="Download missions as annotated GeoJSON file for later reference",
         icon="🗺️",
         data=mission_geojson_data,
         file_name="missions.geojson",
         mime="application/json",
     )
 
+    st.download_button(
+        label="Download scan polygons as annotated GeoJSON file for later reference",
+        icon="🗺️",
+        data=scan_polygon_geojson_data,
+        file_name="scan_polygons.geojson",
+        mime="application/json",
+    )
+
     m = folium.Map(location=center_coords, zoom_start=12)
     folium.GeoJson(
         scan_areas,
+        style_function=simplestyle_style_function,
+        # style_function=lambda x: {"color": "#000000", "weight": 3},
+        # popup=GeoJsonPopup(
+        #     fields=["name"],
+        #     aliases=["Name"],
+        #     localize=True,
+        #     labels=True,
+        #     style="background-color: yellow;",
+        # ),
+    ).add_to(m)
+    folium.GeoJson(
+        scan_polygons,
         style_function=simplestyle_style_function,
         # style_function=lambda x: {"color": "#000000", "weight": 3},
         # popup=GeoJsonPopup(
@@ -791,23 +844,23 @@ with st.expander("Map", expanded=True):
     #         style_function=lambda x: {"color": "#00ff00", "weight": 1}
     #     ).add_to(m)
 
-    folium.GeoJson(
-        missions,
-        # style_function=lambda x: {
-        #     "color": x['properties']["stroke"],
-        #     "weight": x['properties']["stroke-width"]
-        # },
-        style_function=simplestyle_style_function,
-        popup=GeoJsonPopup(
-            fields=["name", "index", "launch_point",
-                    "duration", "distance", "range", "area", "start", "end"],
-            aliases=["Mission Name", "Mission Number", "Launch Point",
-                     "Duration(s)", "Distance(m)", "Range(m)", "Area(sq m)", "Start Slice", "End Slice"],
-            localize=True,
-            labels=True,
-            style="background-color: yellow;",
-        ),
-    ).add_to(m)
+    # folium.GeoJson(
+    #     missions,
+    #     # style_function=lambda x: {
+    #     #     "color": x['properties']["stroke"],
+    #     #     "weight": x['properties']["stroke-width"]
+    #     # },
+    #     style_function=simplestyle_style_function,
+    #     popup=GeoJsonPopup(
+    #         fields=["name", "index", "launch_point",
+    #                 "duration", "distance", "range", "area", "start", "end"],
+    #         aliases=["Mission Name", "Mission Number", "Launch Point",
+    #                  "Duration(s)", "Distance(m)", "Range(m)", "Area(sq m)", "Start Slice", "End Slice"],
+    #         localize=True,
+    #         labels=True,
+    #         style="background-color: yellow;",
+    #     ),
+    # ).add_to(m)
 
     st_folium(m, width=700, height=500, return_on_hover=False)
 
