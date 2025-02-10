@@ -40,17 +40,26 @@ def reverse_geocode(lat, lon):
         'types': 'address,place',  # Specify the types of places to include
         'limit': 1                # Number of results to return
     }
-    response = requests.get(url, params=params)
+    response = requests.get(url, timeout=20, params=params)
     if response.status_code == 200:
-        data = response.json()
-        if data['features']:
-            if 'context' in data['features'][0]['properties']:
-                # Extract the city and country
-                return data['features'][0]['properties']['context']['address']['name'] + ", " + data['features'][0]['properties']['context']['place']['name']
-            # Extract the full address
-            return data['features'][0]['properties']['name']
-        else:
-            return "Address not found"
+        try:
+            data = response.json()
+            if data.get('features') and isinstance(data['features'], list) and len(data['features']) > 0:
+                properties = data['features'][0].get('properties', {})
+                context = properties.get('context', {})
+
+                if isinstance(context, dict):
+                    address_name = context.get('address', {}).get('name')
+                    place_name = context.get('place', {}).get('name')
+
+                    if address_name and place_name:
+                        return f"{address_name}, {place_name}"
+
+                return properties.get('name', "Address not found")
+            else:
+                return "Address not found"
+        except (ValueError, KeyError, TypeError):
+            return "Invalid response format"
     else:
         return "Address error"
 
