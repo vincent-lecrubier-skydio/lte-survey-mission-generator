@@ -1,25 +1,16 @@
-from typing import Tuple
-from shapely import MultiLineString, MultiPolygon, Point
-import streamlit as st
-import json
-from shapely.geometry import shape, LineString, mapping, Polygon
-from shapely.affinity import translate, rotate
-import geopandas as gpd
-from shapely.ops import linemerge
-import numpy as np
-import pyproj
-import math
-from shapely.ops import transform
-import uuid
-from datetime import datetime
-import httpx
-import asyncio
-import io
-import zipfile
 
+import math
+from datetime import datetime
+from typing import Tuple, Any, Union, Optional
+import streamlit as st
+from shapely import MultiLineString, MultiPolygon, Point
+from shapely.geometry import LineString, Polygon
+from shapely.affinity import translate, rotate
+from shapely.ops import transform
+import geopandas as gpd
 import numpy as np
-from shapely.ops import transform, linemerge
 import pyproj
+import uuid
 
 
 # def generate_lawnmower_pattern(polygon, spacing, passes):
@@ -124,6 +115,20 @@ import pyproj
 #                 squares.append(transform(project_to_wgs84, intersection))
 
 #     return squares
+
+
+def ensure_3d_coordinates(coord: Union[Tuple[float, float], Tuple[float, float, float]]) -> Tuple[float, float, float]:
+    """
+    Ensure all coordinates have a z-coordinate. If the input is a 2D coordinate (x, y),
+    it is converted to (x, y, 0). If it's already a 3D coordinate, it is returned as-is.
+    """
+    if isinstance(coord, tuple) and len(coord) == 2:
+        return (coord[0], coord[1], 0.0)
+    elif isinstance(coord, tuple) and len(coord) == 3:
+        return coord
+    else:
+        raise ValueError(
+            "Input must be a tuple of length 2 or 3 containing floats.")
 
 
 def cleanup_names(df):
@@ -364,11 +369,7 @@ def generate_oriented_slices(polygons, direction, corridor_width, slice_thicknes
     # Merge all polygons into a single geometry (union)
     combined_geom = polygons.unary_union
 
-    if isinstance(combined_geom, Polygon):
-        geometries = [combined_geom]
-    elif isinstance(combined_geom, MultiPolygon):
-        geometries = list(combined_geom.geoms)
-    else:
+    if not (isinstance(combined_geom, Polygon) or isinstance(combined_geom, MultiPolygon)):
         raise ValueError("Input GeoDataFrame must contain valid polygons.")
 
     # Get the centroid of the combined geometry
@@ -401,11 +402,7 @@ def compute_oriented_bounding_box(polygons, direction):
     # Merge all polygons into a single geometry (union)
     combined_geom = polygons.unary_union
 
-    if isinstance(combined_geom, Polygon):
-        geometries = [combined_geom]
-    elif isinstance(combined_geom, MultiPolygon):
-        geometries = list(combined_geom.geoms)
-    else:
+    if not (isinstance(combined_geom, Polygon) or isinstance(combined_geom, MultiPolygon)):
         raise ValueError("Input GeoDataFrame must contain valid polygons.")
 
     # Get the centroid of the combined geometry
@@ -429,7 +426,7 @@ def compute_oriented_bounding_box(polygons, direction):
     return oriented_bbox
 
 
-def compute_mission_passes(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int) -> Tuple[gpd.GeoSeries, gpd.GeoSeries]:
+def compute_mission_passes(slices: gpd.GeoDataFrame, passes: gpd.GeoDataFrame, passes_crosshatch: gpd.GeoDataFrame, min_slice_index: int, max_slice_index: int) -> Tuple[gpd.GeoSeries, gpd.GeoSeries,  Optional[gpd.GeoSeries]]:
     """
     Compute the mission path based on the slices and passes.
 
@@ -469,7 +466,7 @@ def compute_optimal_mission_configuration(
         mission_passes_right: gpd.GeoSeries,
         mission_crosshatch_passes_left: gpd.GeoSeries,
         mission_crosshatch_passes_right: gpd.GeoSeries
-) -> Tuple[gpd.GeoDataFrame, gpd.GeoSeries, gpd.GeoSeries]:
+) -> Optional[Tuple[gpd.GeoDataFrame, gpd.GeoSeries, Optional[gpd.GeoSeries]]]:
     """
     Finds the optimal mission configuration (launch point and mission passes)
     Given the launch points and left and right hands mission passes geometries
@@ -548,12 +545,16 @@ def get_start_end_points(gdfs: list[gpd.GeoSeries]) -> Tuple[Point, Point]:
         start_point = Point(first_geom.coords[0])
     elif first_geom.geom_type == 'MultiLineString':
         start_point = Point(first_geom.geoms[0].coords[0])
+    else:
+        raise ValueError("Invalid geometry type in mission passes.")
 
     # Get the ending point of the last geometry
     if last_geom.geom_type == 'LineString':
         end_point = Point(last_geom.coords[-1])
     elif last_geom.geom_type == 'MultiLineString':
         end_point = Point(last_geom.geoms[-1].coords[-1])
+    else:
+        raise ValueError("Invalid geometry type in mission passes.")
 
     return start_point, end_point
 
@@ -576,43 +577,53 @@ def compute_total_mission_path(
     passes: gpd.GeoDataFrame,
     passes_crosshatch: gpd.GeoDataFrame,
     min_slice_index: int,
-    max_slice_index: int
+    max_slice_index: int,
+    process_debug_text: Any
 ) -> LineString:
+    process_debug_text.text("ok1 ok1 ok1")
     if min_slice_index >= max_slice_index:
         return (None, None, None)
-
+    process_debug_text.text("ok1 ok1 ok2")
     (mission_passes, mission_crosshatch_passes, scanned_polygon) = compute_mission_passes(
         slices, passes, passes_crosshatch, min_slice_index, max_slice_index)
-
+    process_debug_text.text("ok1 ok1 ok3")
     if mission_passes.empty and (mission_crosshatch_passes is None or mission_crosshatch_passes.empty):
         return (None, None, None)
-
+    process_debug_text.text("ok1 ok1 ok4")
     # Invert every other line to create lawnmower patterns
     mission_passes_left = gpd.GeoSeries([
         reverse_geometry(geom) if geom and idx % 2 == 0 else geom
         for idx, geom in enumerate(mission_passes)
     ])
+    process_debug_text.text("ok1 ok1 ok5")
     mission_passes_right = gpd.GeoSeries([
         reverse_geometry(geom) if geom and idx % 2 == 1 else geom
         for idx, geom in enumerate(mission_passes)
     ])
+    process_debug_text.text("ok1 ok1 ok6")
     if mission_crosshatch_passes is not None:
         mission_crosshatch_passes_left = gpd.GeoSeries([
             reverse_geometry(geom) if geom and idx % 2 == 0 else geom
             for idx, geom in enumerate(mission_crosshatch_passes)
         ])
-
+        process_debug_text.text("ok1 ok1 ok7")
         mission_crosshatch_passes_right = gpd.GeoSeries([
             reverse_geometry(geom) if geom and idx % 2 == 1 else geom
             for idx, geom in enumerate(mission_crosshatch_passes)
         ])
+        process_debug_text.text("ok1 ok1 ok8")
     else:
         mission_crosshatch_passes_left = None
         mission_crosshatch_passes_right = None
 
-    (launch_point, mission_passes_optimal, mission_crosshatch_passes_optimal) = compute_optimal_mission_configuration(
+    process_debug_text.text("ok1 ok1 ok9")
+    optimal_mission_configuration = compute_optimal_mission_configuration(
         launch_points, mission_passes_left, mission_passes_right, mission_crosshatch_passes_left, mission_crosshatch_passes_right)
-
+    if optimal_mission_configuration is None:
+        raise ValueError("No valid mission configuration found.")
+    (launch_point, mission_passes_optimal,
+     mission_crosshatch_passes_optimal) = optimal_mission_configuration
+    process_debug_text.text("ok1 ok1 ok10")
     # Recreate the full mission path by:
     # 1. Adding the launch point to the start of the mission path
     # 2. Adding the mission passes
@@ -628,6 +639,7 @@ def compute_total_mission_path(
                 all_coords.extend(line.coords)
         else:
             raise ValueError("Invalid geometry type in mission passes.")
+    process_debug_text.text("ok1 ok1 ok15")
     if mission_crosshatch_passes_optimal is not None:
         for idx, geometry in mission_crosshatch_passes_optimal.items():
             if geometry.geom_type == "LineString":
@@ -637,6 +649,10 @@ def compute_total_mission_path(
                     all_coords.extend(line.coords)
             else:
                 raise ValueError("Invalid geometry type in mission passes.")
+    process_debug_text.text("ok1 ok1 ok20")
     all_coords.append(launch_point.geometry.coords[0])
-    mission_path = LineString(all_coords)
+    process_debug_text.text("ok1 ok1 ok21")
+    mission_path = LineString([ensure_3d_coordinates(coords)
+                              for coords in all_coords])
+    process_debug_text.text("ok1 ok1 ok22")
     return (launch_point, mission_path, scanned_polygon)

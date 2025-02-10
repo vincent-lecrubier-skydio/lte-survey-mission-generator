@@ -7,15 +7,13 @@ import uuid
 import httpx
 from shapely import LineString, Point
 from shapely.geometry import mapping
-from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, cleanup_names, generate_corridors, stgeodataframe
+
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
-import numpy as np
-import pydeck as pdk
 import folium
 import time
-from folium.features import GeoJsonPopup, GeoJsonTooltip
+from folium.features import GeoJsonPopup
 from streamlit_folium import st_folium
 import altair as alt
 import pyproj
@@ -24,6 +22,8 @@ import math
 import zipfile
 import warnings
 import requests
+
+from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
 mapbox_token = "pk.eyJ1Ijoic2t5ZGlvLXRlYW0iLCJhIjoiY20zbW9mYmZ0MGpsMTJpcHl3bWhsbm5rcSJ9.2bTFNXUX0RrFKLiH8EgW_g"
@@ -359,12 +359,13 @@ def preprocess(geojson_file) -> pd.DataFrame:
 def process(
         geojson_file, _launch_points_df, _scan_areas_df,
         corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch,
-        altitude, speed, max_mission_duration, name_template
+        altitude, speed, max_mission_duration, name_template, total_bounds
 ) -> pd.DataFrame:
     process_progress_bar = st.progress(0, text="Computing projections")
+    process_debug_text = st.empty()
 
     # Create a local projection centered on the polygon
-    minx, miny, maxx, maxy = scan_areas_df.total_bounds
+    minx, miny, maxx, maxy = total_bounds
     local_utm = pyproj.Proj(proj='utm', zone=int(
         (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
     wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
@@ -411,14 +412,23 @@ def process(
         best_end = None
         best_reward = float('-inf')
 
+        process_debug_text.text("ok1")
+
         while low <= high:
             mid = (low + high) // 2
 
+            process_debug_text.text("ok1 ok1")
+
             (launch_point, mission_path, scanned_polygon) = compute_total_mission_path(
-                launch_points, slices, passes, passes_crosshatch, current_start, mid)
+                launch_points, slices, passes, passes_crosshatch, current_start, mid, process_debug_text)
+
+            process_debug_text.text("ok1 ok2")
+
             mission_duration = compute_mission_duration(
                 mission_path, altitude, speed)
             reward = mid-current_start
+
+            process_debug_text.text("ok1 ok3")
             # st.text(f"{current_start}, {mid}: {mission_duration}")
 
             if mission_duration is None:  # Invalid range, increase size
@@ -435,6 +445,9 @@ def process(
                     best_end = mid
                 low = mid + 1  # Explore larger ranges
 
+            process_debug_text.text("ok1 ok4")
+
+        process_debug_text.text("ok2")
         # If no valid range is found, terminate the loop and report problem
         if best_end is None:
             process_progress_bar.empty()
@@ -514,449 +527,450 @@ def process(
     )
 
 
-st.set_page_config(
-    page_title="LTE Survey Mission Generator",
-    page_icon="📶",
-    layout="wide"
-)
+def main():
+    st.set_page_config(
+        page_title="LTE Survey Mission Generator",
+        page_icon="📶",
+        layout="wide"
+    )
 
-###############################################################################
-st.markdown("# 📶 LTE Survey Mission Generator")
+    ###############################################################################
+    st.markdown("# 📶 LTE Survey Mission Generator")
 
-###############################################################################
-st.markdown("## 1. Upload input file")
+    ###############################################################################
+    st.markdown("## 1. Upload input file")
 
-geojson_file = st.file_uploader(
-    """
+    geojson_file = st.file_uploader("""
 Upload a geojson file containing: Polygons covering the area you want to scan and Points representing launch/land locations.
 
 Use [geojson.io](https://geojson.io) to create your geojson files. Example valid geojson file: [san-mateo.geojson](/app/static/san-mateo.geojson)
-""",
-    type=["json", "geojson"])
+    """,
+                                    type=["json", "geojson"])
 
-if geojson_file is None:
-    st.stop()
+    if geojson_file is None:
+        st.stop()
 
-try:
-    (center_coords, launch_points_df, scan_areas_df) = preprocess(geojson_file)
-except ValueError as e:
-    st.error(e)
-    st.stop()
+    try:
+        (center_coords, launch_points_df, scan_areas_df) = preprocess(geojson_file)
+    except ValueError as e:
+        st.error(e)
+        st.stop()
 
-with st.expander("View map of scan areas and launch points"):
-    m = folium.Map(location=center_coords, zoom_start=12)
-    folium.GeoJson(
-        pd.concat([launch_points_df, scan_areas_df]),
-        style_function=simplestyle_style_function,
-        popup=GeoJsonPopup(
-            fields=["name"],
-            aliases=["Name"],
-            localize=True,
-            labels=True,
-            style="background-color: yellow;",
-        ),
-    ).add_to(m)
-    st_folium(m, width=700, height=500, return_on_hover=False)
+    with st.expander("View map of scan areas and launch points"):
+        m = folium.Map(location=center_coords, zoom_start=12)
+        folium.GeoJson(
+            pd.concat([launch_points_df, scan_areas_df]),
+            style_function=simplestyle_style_function,
+            popup=GeoJsonPopup(
+                fields=["name"],
+                aliases=["Name"],
+                localize=True,
+                labels=True,
+                style="background-color: yellow;",
+            ),
+        ).add_to(m)
+        st_folium(m, width=700, height=500, return_on_hover=False)
 
-###############################################################################
-st.markdown("## 2. Customize parameters")
+    ###############################################################################
+    st.markdown("## 2. Customize parameters")
 
-name_template = st.text_input(
-    "Mission name template:", value="LTE Scan | {date} | {launch_point} | #{index} | {duration}s")
+    name_template = st.text_input(
+        "Mission name template:", value="LTE Scan | {date} | {launch_point} | #{index} | {duration}s")
 
-with st.expander("Mission Planning Parameters"):
+    with st.expander("Mission Planning Parameters"):
 
-    st.markdown(
-        """
-        We generate a lawnmower pattern to scan the area with a given spacing between passes.
-        We slice the scan area into separate corridors of specified width, along the first pass axis.
-        For each corridor, we then slice it again into separate slices across the first pass axis.
-        We compute the size of each slice such that each mission is as long as possible, but no more than target duration.
-        We then fly the drone at specific speed and altitude along these passes.
-        """)
+        st.markdown(
+            """
+            We generate a lawnmower pattern to scan the area with a given spacing between passes.
+            We slice the scan area into separate corridors of specified width, along the first pass axis.
+            For each corridor, we then slice it again into separate slices across the first pass axis.
+            We compute the size of each slice such that each mission is as long as possible, but no more than target duration.
+            We then fly the drone at specific speed and altitude along these passes.
+            """)
 
-    max_mission_duration = st.number_input(
-        "Target mission duration, in seconds:", min_value=0, value=20*60)
-    st.markdown(
-        f"Mission duration = {max_mission_duration:.0f}s = {max_mission_duration/60:.0f}min{max_mission_duration%60:.0f}s")
+        max_mission_duration = st.number_input(
+            "Target mission duration, in seconds:", min_value=0, value=20*60)
+        st.markdown(
+            f"Mission duration = {max_mission_duration:.0f}s = {max_mission_duration/60:.0f}min{max_mission_duration%60:.0f}s")
 
-    corridor_width = st.number_input(
-        "Width of mission corridors, in meters:", min_value=100, value=800)
-    st.markdown(
-        f"Width = {corridor_width:.0f}m = {corridor_width*3.28084:.0f}ft = {corridor_width*1.09361:.0f}yd = {corridor_width/1609:.2f} Miles = {corridor_width/1852:.2f} Nautical Miles")
+        corridor_width = st.number_input(
+            "Width of mission corridors, in meters:", min_value=100, value=800)
+        st.markdown(
+            f"Width = {corridor_width:.0f}m = {corridor_width*3.28084:.0f}ft = {corridor_width*1.09361:.0f}yd = {corridor_width/1609:.2f} Miles = {corridor_width/1852:.2f} Nautical Miles")
 
-    corridor_direction = st.number_input(
-        "Direction of mission corridors, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=90)
-    st.markdown(
-        f"Corridor Direction = {corridor_direction:.0f}deg")
+        corridor_direction = st.number_input(
+            "Direction of mission corridors, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=90)
+        st.markdown(
+            f"Corridor Direction = {corridor_direction:.0f}deg")
 
-    pass_spacing = st.number_input(
-        "Spacing between passes in meters:", min_value=10, value=100)
-    st.markdown(
-        f"Spacing = {pass_spacing:.0f}m = {pass_spacing*3.28084:.0f}ft = {pass_spacing*1.09361:.0f}yd = {pass_spacing/1609:.2f} Miles = {pass_spacing/1852:.2f} Nautical Miles")
+        pass_spacing = st.number_input(
+            "Spacing between passes in meters:", min_value=10, value=100)
+        st.markdown(
+            f"Spacing = {pass_spacing:.0f}m = {pass_spacing*3.28084:.0f}ft = {pass_spacing*1.09361:.0f}yd = {pass_spacing/1609:.2f} Miles = {pass_spacing/1852:.2f} Nautical Miles")
 
-    pass_direction = st.number_input(
-        "Direction of mission passes, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=0)
-    st.markdown(
-        f"Passes Direction = {pass_direction:.0f}deg")
+        pass_direction = st.number_input(
+            "Direction of mission passes, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=0)
+        st.markdown(
+            f"Passes Direction = {pass_direction:.0f}deg")
 
-    pass_crosshatch = st.checkbox(
-        "Crosshatch passes", value=False)
-    st.markdown(
-        f"Crosshatch pass = {'Yes' if pass_crosshatch else 'No'}")
+        pass_crosshatch = st.checkbox(
+            "Crosshatch passes", value=False)
+        st.markdown(
+            f"Crosshatch pass = {'Yes' if pass_crosshatch else 'No'}")
 
-    speed = st.number_input(
-        "Flight speed in meters per second:", min_value=0, value=16)
-    st.markdown(
-        f"Flight speed = {speed:.0f}m/s = {speed*3.6:.1f}km/h = {speed*3600/1609:.1f}Mph = {speed*3600/1852:.1f}kts")
+        speed = st.number_input(
+            "Flight speed in meters per second:", min_value=0, value=16)
+        st.markdown(
+            f"Flight speed = {speed:.0f}m/s = {speed*3.6:.1f}km/h = {speed*3600/1609:.1f}Mph = {speed*3600/1852:.1f}kts")
 
-    altitude = st.number_input(
-        "Flight altitude in meters:", min_value=10, value=61)
-    st.markdown(
-        f"Altitude = {altitude:.0f}m = {altitude*3.28084:.0f}ft = {altitude*1.09361:.0f}yd = {altitude/1609:.2f} Miles = {altitude/1852:.2f} Nautical Miles")
+        altitude = st.number_input(
+            "Flight altitude in meters:", min_value=10, value=61)
+        st.markdown(
+            f"Altitude = {altitude:.0f}m = {altitude*3.28084:.0f}ft = {altitude*1.09361:.0f}yd = {altitude/1609:.2f} Miles = {altitude/1852:.2f} Nautical Miles")
 
-with st.expander("Return Settings"):
+    with st.expander("Return Settings"):
 
-    rtx_height = st.number_input(
-        "Return Height in meters:", min_value=10, value=61)
-    st.markdown(
-        f"Return Height = {rtx_height:.0f}m = {rtx_height*3.28084:.0f}ft = {rtx_height*1.09361:.0f}yd = {rtx_height/1609:.2f} Miles = {rtx_height/1852:.2f} Nautical Miles")
+        rtx_height = st.number_input(
+            "Return Height in meters:", min_value=10, value=61)
+        st.markdown(
+            f"Return Height = {rtx_height:.0f}m = {rtx_height*3.28084:.0f}ft = {rtx_height*1.09361:.0f}yd = {rtx_height/1609:.2f} Miles = {rtx_height/1852:.2f} Nautical Miles")
 
-    rtx_speed = st.number_input(
-        "Return Speed in meters per second:", min_value=0, value=16)
-    st.markdown(
-        f"Return Speed = {rtx_speed:.0f}m/s = {rtx_speed*3.6:.1f}km/h = {rtx_speed*3600/1609:.1f}Mph = {rtx_speed*3600/1852:.1f}kts")
+        rtx_speed = st.number_input(
+            "Return Speed in meters per second:", min_value=0, value=16)
+        st.markdown(
+            f"Return Speed = {rtx_speed:.0f}m/s = {rtx_speed*3.6:.1f}km/h = {rtx_speed*3600/1609:.1f}Mph = {rtx_speed*3600/1852:.1f}kts")
 
-    rtx_wait = st.number_input(
-        "Wait Before Return on Lost Connection:", min_value=0, value=30)
-    st.markdown(
-        f"Wait Before Return on Lost Connection = {rtx_wait:.0f}s = {rtx_wait/60:.0f}min{rtx_wait%60:.0f}s")
+        rtx_wait = st.number_input(
+            "Wait Before Return on Lost Connection:", min_value=0, value=30)
+        st.markdown(
+            f"Wait Before Return on Lost Connection = {rtx_wait:.0f}s = {rtx_wait/60:.0f}min{rtx_wait%60:.0f}s")
 
-with st.expander("Cost Estimation Parameters"):
-    cost_fixed = st.number_input(
-        "Fixed base cost for the whole program:", min_value=0, value=400)
+    with st.expander("Cost Estimation Parameters"):
+        cost_fixed = st.number_input(
+            "Fixed base cost for the whole program:", min_value=0, value=400)
 
-    cost_per_flight = st.number_input(
-        "Fixed cost per flight mission:", min_value=0, value=200)
+        cost_per_flight = st.number_input(
+            "Fixed cost per flight mission:", min_value=0, value=200)
 
-    cost_per_flight_hour = st.number_input(
-        "Variable cost per flight hour:", min_value=0, value=70)
+        cost_per_flight_hour = st.number_input(
+            "Variable cost per flight hour:", min_value=0, value=70)
 
+    ###############################################################################
+    st.markdown("## 3. View missions")
 
-###############################################################################
-st.markdown("## 3. View missions")
+    try:
+        total_bounds = scan_areas_df.total_bounds
+        (
+            scan_areas,
+            launch_points,
+            passes,
+            passes_crosshatch,
+            missions,
+            waypoints
+        ) = process(
+            geojson_file,
+            launch_points_df,
+            scan_areas_df,
+            corridor_direction,
+            corridor_width,
+            pass_direction,
+            pass_spacing,
+            pass_crosshatch,
+            altitude,
+            speed,
+            max_mission_duration,
+            name_template, total_bounds
+        )
+    except ValueError as e:
+        st.error(e)
 
-try:
-    (
-        scan_areas,
-        launch_points,
-        passes,
-        passes_crosshatch,
-        missions,
-        waypoints
-    ) = process(
-        geojson_file,
-        launch_points_df,
-        scan_areas_df,
-        corridor_direction,
-        corridor_width,
-        pass_direction,
-        pass_spacing,
-        pass_crosshatch,
-        altitude,
-        speed,
-        max_mission_duration,
-        name_template
-    )
-except ValueError as e:
-    st.error(e)
+        if hasattr(e, 'location'):
+            with st.expander("Map showing problematic area in red", expanded=True):
+                error_geojson_data = gdfs_to_json(
+                    e.location, e.launch_points, e.scan_areas).encode('utf-8')
+                st.download_button(
+                    label="Download GeoJSON file of problematic areas for further analysis",
+                    icon="🗺️",
+                    data=error_geojson_data,
+                    file_name="missions.geojson",
+                    mime="application/json",
+                )
 
-    if hasattr(e, 'location'):
-        with st.expander("Map showing problematic area in red", expanded=True):
-            error_geojson_data = gdfs_to_json(
-                e.location, e.launch_points, e.scan_areas).encode('utf-8')
-            st.download_button(
-                label="Download GeoJSON file of problematic areas for further analysis",
-                icon="🗺️",
-                data=error_geojson_data,
-                file_name="missions.geojson",
-                mime="application/json",
-            )
+                m = folium.Map(location=center_coords, zoom_start=12)
+                folium.GeoJson(
+                    e.scan_areas,
+                    style_function=simplestyle_style_function,
+                    popup=GeoJsonPopup(
+                        fields=["name"],
+                        aliases=["Name"],
+                        localize=True,
+                        labels=True,
+                        style="background-color: yellow;",
+                    ),
+                ).add_to(m)
+                folium.GeoJson(
+                    e.launch_points,
+                    style_function=simplestyle_style_function,
+                    popup=GeoJsonPopup(
+                        fields=["name", "address"],
+                        aliases=["Name", "Address"],
+                        localize=True,
+                        labels=True,
+                        style="background-color: yellow;",
+                    ),
+                ).add_to(m)
+                folium.GeoJson(
+                    e.location,
+                    style_function=simplestyle_style_function,
+                    # popup=GeoJsonPopup(
+                    #     fields=["name"],
+                    #     aliases=["Name"],
+                    #     localize=True,
+                    #     labels=True,
+                    #     style="background-color: yellow;",
+                    # ),
+                ).add_to(m)
 
-            m = folium.Map(location=center_coords, zoom_start=12)
-            folium.GeoJson(
-                e.scan_areas,
-                style_function=simplestyle_style_function,
-                popup=GeoJsonPopup(
-                    fields=["name"],
-                    aliases=["Name"],
-                    localize=True,
-                    labels=True,
-                    style="background-color: yellow;",
-                ),
-            ).add_to(m)
-            folium.GeoJson(
-                e.launch_points,
-                style_function=simplestyle_style_function,
-                popup=GeoJsonPopup(
-                    fields=["name", "address"],
-                    aliases=["Name", "Address"],
-                    localize=True,
-                    labels=True,
-                    style="background-color: yellow;",
-                ),
-            ).add_to(m)
-            folium.GeoJson(
-                e.location,
-                style_function=simplestyle_style_function,
-                # popup=GeoJsonPopup(
-                #     fields=["name"],
-                #     aliases=["Name"],
-                #     localize=True,
-                #     labels=True,
-                #     style="background-color: yellow;",
-                # ),
-            ).add_to(m)
+                st_folium(m, width=700, height=500, return_on_hover=False)
+        st.stop()
 
-            st_folium(m, width=700, height=500, return_on_hover=False)
-    st.stop()
+    with st.expander("Overview Metrics", expanded=True):
+        col11, col12, col13 = st.columns(3)
+        col11.metric("Number of flights", f"{len(missions):,d} flights",
+                     help="Total number of flight missions to perform in order to scan the entire area")
+        col12.metric("Total flight time", format_seconds_to_hm(
+            missions["duration"].sum()), help="Sum of all mission durations, total flight time to scan the entire area")
+        col13.metric("Total flight distance",
+                     f"{missions['distance'].sum() / 1609.0:,.0f} miles", help="Sum of all mission distances, total flight distance to scan the entire area")
 
-with st.expander("Overview Metrics", expanded=True):
-    col11, col12, col13 = st.columns(3)
-    col11.metric("Number of flights", f"{len(missions):,d} flights",
-                 help="Total number of flight missions to perform in order to scan the entire area")
-    col12.metric("Total flight time", format_seconds_to_hm(
-        missions["duration"].sum()), help="Sum of all mission durations, total flight time to scan the entire area")
-    col13.metric("Total flight distance",
-                 f"{missions['distance'].sum() / 1609.0:,.0f} miles", help="Sum of all mission distances, total flight distance to scan the entire area")
+        col21, col22, col23 = st.columns(3)
+        col21.metric("Total cost",
+                     f"${cost_fixed + len(missions) * cost_per_flight + missions['duration'].sum() / 3600 * cost_per_flight_hour:,.0f}", help="Total cost estimate for the entire program")
+        col22.metric("Total scanned area",
+                     f"{missions['area'].sum()/(1609*1609):,.1f} sq mi", help="Total surface area scanned by all missions")
+        col23.metric("Total waypoints",
+                     f"{len(waypoints):,d}", help="Sum of number of waypoints in all missions")
 
-    col21, col22, col23 = st.columns(3)
-    col21.metric("Total cost",
-                 f"${cost_fixed + len(missions) * cost_per_flight + missions['duration'].sum() / 3600 * cost_per_flight_hour:,.0f}", help="Total cost estimate for the entire program")
-    col22.metric("Total scanned area",
-                 f"{missions['area'].sum()/(1609*1609):,.1f} sq mi", help="Total surface area scanned by all missions")
-    col23.metric("Total waypoints",
-                 f"{len(waypoints):,d}", help="Sum of number of waypoints in all missions")
+        col31, col32, col33 = st.columns(3)
+        col31.metric("Launch points",
+                     f"{missions['launch_point'].nunique():,d} locations", help="Number of launch point locations effectively used in the missions")
+        col32.metric("75th percentile range",
+                     f"{waypoints['range'].quantile(0.75) / 1609.0:,.2f} miles", help="75% of flight time will be done within this distance from the launch point")
+        col33.metric("Max range",
+                     f"{waypoints['range'].max() / 1609.0:,.2f} miles", help="Maximum range from launch point reached during the furthest mission waypoint")
 
-    col31, col32, col33 = st.columns(3)
-    col31.metric("Launch points",
-                 f"{missions['launch_point'].nunique():,d} locations", help="Number of launch point locations effectively used in the missions")
-    col32.metric("75th percentile range",
-                 f"{waypoints['range'].quantile(0.75) / 1609.0:,.2f} miles", help="75% of flight time will be done within this distance from the launch point")
-    col33.metric("Max range",
-                 f"{waypoints['range'].max() / 1609.0:,.2f} miles", help="Maximum range from launch point reached during the furthest mission waypoint")
+    with st.expander("Map", expanded=True):
 
-with st.expander("Map", expanded=True):
+        mission_geojson_data = gdfs_to_json(
+            scan_areas, launch_points, missions).encode('utf-8')
 
-    mission_geojson_data = gdfs_to_json(
-        scan_areas, launch_points, missions).encode('utf-8')
+        st.download_button(
+            label="Download as annotated GeoJSON file for later reference",
+            icon="🗺️",
+            data=mission_geojson_data,
+            file_name="missions.geojson",
+            mime="application/json",
+        )
 
+        m = folium.Map(location=center_coords, zoom_start=12)
+        folium.GeoJson(
+            scan_areas,
+            style_function=simplestyle_style_function,
+            # style_function=lambda x: {"color": "#000000", "weight": 3},
+            # popup=GeoJsonPopup(
+            #     fields=["name"],
+            #     aliases=["Name"],
+            #     localize=True,
+            #     labels=True,
+            #     style="background-color: yellow;",
+            # ),
+        ).add_to(m)
+        folium.GeoJson(
+            launch_points,
+            style_function=simplestyle_style_function,
+            # style_function=lambda x: {"color": "#0000ff", "weight": 3},
+            popup=GeoJsonPopup(
+                fields=["name", "address"],
+                aliases=["Name", "Address"],
+                localize=True,
+                labels=True,
+                style="background-color: yellow;",
+            ),
+        ).add_to(m)
+        # folium.GeoJson(
+        #     corridors,
+        #     style_function=lambda x: {"color": "#ff0000", "weight": 2}
+
+        # ).add_to(m)
+
+        # folium.GeoJson(
+        #     passes,
+        #     style_function=lambda x: {"color": "#00ff00", "weight": 1}
+        # ).add_to(m)
+        # if passes_crosshatch is not None:
+        #     folium.GeoJson(
+        #         passes_crosshatch,
+        #         style_function=lambda x: {"color": "#00ff00", "weight": 1}
+        #     ).add_to(m)
+
+        folium.GeoJson(
+            missions,
+            # style_function=lambda x: {
+            #     "color": x['properties']["stroke"],
+            #     "weight": x['properties']["stroke-width"]
+            # },
+            style_function=simplestyle_style_function,
+            popup=GeoJsonPopup(
+                fields=["name", "index", "launch_point",
+                        "duration", "distance", "range", "area", "start", "end"],
+                aliases=["Mission Name", "Mission Number", "Launch Point",
+                         "Duration(s)", "Distance(m)", "Range(m)", "Area(sq m)", "Start Slice", "End Slice"],
+                localize=True,
+                labels=True,
+                style="background-color: yellow;",
+            ),
+        ).add_to(m)
+
+        st_folium(m, width=700, height=500, return_on_hover=False)
+
+    with st.expander("Analytics", expanded=False):
+
+        mission_duration_chart = alt.Chart(missions).mark_bar().encode(
+            x=alt.X("duration", bin=alt.Bin(maxbins=100, extent=[0, max_mission_duration*1.2]),
+                    title=f"Mission duration (s)"),
+            y=alt.Y('count()', title='Number of Missions')
+        ).properties(
+            title=f"Histogram of missions durations",
+            width=600,
+            height=400
+        )
+        st.altair_chart(mission_duration_chart, use_container_width=True)
+
+        launch_point_chart = alt.Chart(missions).mark_bar().encode(
+            x=alt.X('launch_point:N', title='Mission Launch Point', axis=alt.Axis(
+                labelAngle=-45,  # Rotate labels for better readability
+                labelOverlap=False,  # Avoid overlapping labels
+                labelLimit=200,  # Increase the maximum length of labels
+                labelAlign='right'  # Align labels to avoid truncation
+            )),
+            y=alt.Y('count()', title='Number of Missions'),
+            tooltip=['launch_point', 'count()']  # Tooltip for more information
+        ).properties(
+            title="Histogram of missions per launch point",
+            width=600,
+            height=400
+        )
+        st.altair_chart(launch_point_chart, use_container_width=True)
+
+        range_chart = alt.Chart(waypoints).mark_bar().encode(
+            x=alt.X("range", bin=alt.Bin(maxbins=100, extent=[0, waypoints['range'].max()]),
+                    title=f"Range of waypoint (m)"),
+            y=alt.Y('count()', title='Number of waypoints')
+        ).properties(
+            title=f"Histogram of waypoint ranges from launch point",
+            width=600,
+            height=400
+        )
+        st.altair_chart(range_chart, use_container_width=True)
+
+        waypoints_chart = alt.Chart(waypoints).mark_bar().encode(
+            x=alt.X("mission_index", bin=alt.Bin(step=1, extent=[0, waypoints['mission_index'].max()+1]),
+                    title=f"Mission index"),
+            y=alt.Y('count()', title='Number of waypoints')
+        ).properties(
+            title=f"Number of waypoints per mission",
+            width=600,
+            height=400
+        )
+        st.altair_chart(waypoints_chart, use_container_width=True)
+
+    with st.expander("Details", expanded=False):
+        stgeodataframe(missions)
+
+    ###############################################################################
+    st.markdown("## 4. Get Missions")
+
+    missions_protos_json = [
+        generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait)
+        for i, row in missions.iterrows()
+    ]
+
+    # Create an in-memory bytes buffer to hold the ZIP file
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        for i, mission_proto_json in enumerate(missions_protos_json):
+            filename = f"mission_{i}.json"
+            zip_file.writestr(filename, mission_proto_json)
+    # Seek to the beginning of the BytesIO buffer
+    zip_buffer.seek(0)
+    # Provide the ZIP file for download
     st.download_button(
-        label="Download as annotated GeoJSON file for later reference",
-        icon="🗺️",
-        data=mission_geojson_data,
-        file_name="missions.geojson",
-        mime="application/json",
+        label="Download zip file of all missions.json",
+        icon="🗄️",
+        data=zip_buffer,
+        file_name="missions.zip",
+        mime="application/zip"
     )
 
-    m = folium.Map(location=center_coords, zoom_start=12)
-    folium.GeoJson(
-        scan_areas,
-        style_function=simplestyle_style_function,
-        # style_function=lambda x: {"color": "#000000", "weight": 3},
-        # popup=GeoJsonPopup(
-        #     fields=["name"],
-        #     aliases=["Name"],
-        #     localize=True,
-        #     labels=True,
-        #     style="background-color: yellow;",
-        # ),
-    ).add_to(m)
-    folium.GeoJson(
-        launch_points,
-        style_function=simplestyle_style_function,
-        # style_function=lambda x: {"color": "#0000ff", "weight": 3},
-        popup=GeoJsonPopup(
-            fields=["name", "address"],
-            aliases=["Name", "Address"],
-            localize=True,
-            labels=True,
-            style="background-color: yellow;",
-        ),
-    ).add_to(m)
-    # folium.GeoJson(
-    #     corridors,
-    #     style_function=lambda x: {"color": "#ff0000", "weight": 2}
+    with st.expander("Skydio Cloud settings", expanded=False):
 
-    # ).add_to(m)
+        cloud_api_url = st.text_input(
+            "Cloud API URL", value="https://api.skydio.com/api/v0/mission_document/template")
+        api_key = st.text_input("API Token", type="password")
 
-    # folium.GeoJson(
-    #     passes,
-    #     style_function=lambda x: {"color": "#00ff00", "weight": 1}
-    # ).add_to(m)
-    # if passes_crosshatch is not None:
-    #     folium.GeoJson(
-    #         passes_crosshatch,
-    #         style_function=lambda x: {"color": "#00ff00", "weight": 1}
-    #     ).add_to(m)
+    if api_key is not None and cloud_api_url is not None and cloud_api_url != "" and api_key != "" and len(missions_protos_json) > 0:
+        if st.button("Upload all missions to Skydio Cloud", icon="🚀"):
+            upload_progress_bar = st.progress(0.0, text="Uploading missions")
 
-    folium.GeoJson(
-        missions,
-        # style_function=lambda x: {
-        #     "color": x['properties']["stroke"],
-        #     "weight": x['properties']["stroke-width"]
-        # },
-        style_function=simplestyle_style_function,
-        popup=GeoJsonPopup(
-            fields=["name", "index", "launch_point",
-                    "duration", "distance", "range", "area", "start", "end"],
-            aliases=["Mission Name", "Mission Number", "Launch Point",
-                     "Duration(s)", "Distance(m)", "Range(m)", "Area(sq m)", "Start Slice", "End Slice"],
-            localize=True,
-            labels=True,
-            style="background-color: yellow;",
-        ),
-    ).add_to(m)
+            async def upload_mission(session, request_url, headers, mission_json_data, i):
+                upload_progress_bar.progress(
+                    i/len(missions_protos_json), text=f"Uploading missions ({i}/{len(missions_protos_json)})")
+                response = await session.post(request_url, headers=headers, data=mission_json_data)
+                if response.status_code != 200:
+                    return f"Mission {i}: {response.text}"
+                return None
 
-    st_folium(m, width=700, height=500, return_on_hover=False)
+            async def upload_missions():
+                headers = {
+                    "Authorization": f"{api_key}",
+                    "Content-Type": "application/json"
+                }
+                error_messages = []
+                batch_size = 50  # Number of requests allowed per second
+                delay = 1  # Delay in seconds between batches
 
-with st.expander("Analytics", expanded=False):
+                async with httpx.AsyncClient() as session:
+                    for start in range(0, len(missions_protos_json), batch_size):
+                        batch = missions_protos_json[start:start + batch_size]
+                        tasks = [
+                            upload_mission(session, cloud_api_url,
+                                           headers, mission_proto_json, i)
+                            for i, mission_proto_json in enumerate(batch, start=start)
+                        ]
 
-    mission_duration_chart = alt.Chart(missions).mark_bar().encode(
-        x=alt.X("duration", bin=alt.Bin(maxbins=100, extent=[0, max_mission_duration*1.2]),
-                title=f"Mission duration (s)"),
-        y=alt.Y('count()', title='Number of Missions')
-    ).properties(
-        title=f"Histogram of missions durations",
-        width=600,
-        height=400
-    )
-    st.altair_chart(mission_duration_chart, use_container_width=True)
+                        results = await asyncio.gather(*tasks)
 
-    launch_point_chart = alt.Chart(missions).mark_bar().encode(
-        x=alt.X('launch_point:N', title='Mission Launch Point', axis=alt.Axis(
-            labelAngle=-45,  # Rotate labels for better readability
-            labelOverlap=False,  # Avoid overlapping labels
-            labelLimit=200,  # Increase the maximum length of labels
-            labelAlign='right'  # Align labels to avoid truncation
-        )),
-        y=alt.Y('count()', title='Number of Missions'),
-        tooltip=['launch_point', 'count()']  # Tooltip for more information
-    ).properties(
-        title="Histogram of missions per launch point",
-        width=600,
-        height=400
-    )
-    st.altair_chart(launch_point_chart, use_container_width=True)
+                        for result in results:
+                            if result:
+                                error_messages.append(result)
 
-    range_chart = alt.Chart(waypoints).mark_bar().encode(
-        x=alt.X("range", bin=alt.Bin(maxbins=100, extent=[0, waypoints['range'].max()]),
-                title=f"Range of waypoint (m)"),
-        y=alt.Y('count()', title='Number of waypoints')
-    ).properties(
-        title=f"Histogram of waypoint ranges from launch point",
-        width=600,
-        height=400
-    )
-    st.altair_chart(range_chart, use_container_width=True)
+                        # Delay between batches
+                        if start + batch_size < len(missions_protos_json):
+                            await asyncio.sleep(delay)
 
-    waypoints_chart = alt.Chart(waypoints).mark_bar().encode(
-        x=alt.X("mission_index", bin=alt.Bin(step=1, extent=[0, waypoints['mission_index'].max()+1]),
-                title=f"Mission index"),
-        y=alt.Y('count()', title='Number of waypoints')
-    ).properties(
-        title=f"Number of waypoints per mission",
-        width=600,
-        height=400
-    )
-    st.altair_chart(waypoints_chart, use_container_width=True)
+                upload_progress_bar.progress(100, text="Finalizing")
+                time.sleep(1.0)
+                upload_progress_bar.empty()
 
-with st.expander("Details", expanded=False):
-    stgeodataframe(missions)
-
-###############################################################################
-st.markdown("## 4. Get Missions")
+                if error_messages:
+                    st.error("Errors occurred during the upload:\n" +
+                             "\n".join(error_messages))
+                else:
+                    st.success("All missions uploaded successfully!")
+            asyncio.run(upload_missions())
+    else:
+        st.warning(
+            "Please provide the Cloud API URL and API Token in Skydio Cloud settings above in order to upload missions")
 
 
-missions_protos_json = [
-    generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait)
-    for i, row in missions.iterrows()
-]
-
-# Create an in-memory bytes buffer to hold the ZIP file
-zip_buffer = io.BytesIO()
-with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-    for i, mission_proto_json in enumerate(missions_protos_json):
-        filename = f"mission_{i}.json"
-        zip_file.writestr(filename, mission_proto_json)
-# Seek to the beginning of the BytesIO buffer
-zip_buffer.seek(0)
-# Provide the ZIP file for download
-st.download_button(
-    label="Download zip file of all missions.json",
-    icon="🗄️",
-    data=zip_buffer,
-    file_name="missions.zip",
-    mime="application/zip"
-)
-
-with st.expander("Skydio Cloud settings", expanded=False):
-
-    cloud_api_url = st.text_input(
-        "Cloud API URL", value="https://api.skydio.com/api/v0/mission_document/template")
-    api_key = st.text_input("API Token", type="password")
-
-
-if api_key is not None and cloud_api_url is not None and cloud_api_url != "" and api_key != "" and len(missions_protos_json) > 0:
-    if st.button("Upload all missions to Skydio Cloud", icon="🚀"):
-        upload_progress_bar = st.progress(0.0, text="Uploading missions")
-
-        async def upload_mission(session, request_url, headers, mission_json_data, i):
-            upload_progress_bar.progress(
-                i/len(missions_protos_json), text=f"Uploading missions ({i}/{len(missions_protos_json)})")
-            response = await session.post(request_url, headers=headers, data=mission_json_data)
-            if response.status_code != 200:
-                return f"Mission {i}: {response.text}"
-            return None
-
-        async def upload_missions():
-            headers = {
-                "Authorization": f"{api_key}",
-                "Content-Type": "application/json"
-            }
-            error_messages = []
-            batch_size = 50  # Number of requests allowed per second
-            delay = 1  # Delay in seconds between batches
-
-            async with httpx.AsyncClient() as session:
-                for start in range(0, len(missions_protos_json), batch_size):
-                    batch = missions_protos_json[start:start + batch_size]
-                    tasks = [
-                        upload_mission(session, cloud_api_url,
-                                       headers, mission_proto_json, i)
-                        for i, mission_proto_json in enumerate(batch, start=start)
-                    ]
-
-                    results = await asyncio.gather(*tasks)
-
-                    for result in results:
-                        if result:
-                            error_messages.append(result)
-
-                    # Delay between batches
-                    if start + batch_size < len(missions_protos_json):
-                        await asyncio.sleep(delay)
-
-            upload_progress_bar.progress(100, text="Finalizing")
-            time.sleep(1.0)
-            upload_progress_bar.empty()
-
-            if error_messages:
-                st.error("Errors occurred during the upload:\n" +
-                         "\n".join(error_messages))
-            else:
-                st.success("All missions uploaded successfully!")
-        asyncio.run(upload_missions())
-else:
-    st.warning(
-        "Please provide the Cloud API URL and API Token in Skydio Cloud settings above in order to upload missions")
+main()
