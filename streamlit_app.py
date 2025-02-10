@@ -634,7 +634,7 @@ with st.expander("Return Settings"):
 
 with st.expander("Cost Estimation Parameters"):
     cost_fixed = st.number_input(
-        "Fixed base cost for the whole program:", min_value=0, value=2000)
+        "Fixed base cost for the whole program:", min_value=0, value=400)
 
     cost_per_flight = st.number_input(
         "Fixed cost per flight mission:", min_value=0, value=200)
