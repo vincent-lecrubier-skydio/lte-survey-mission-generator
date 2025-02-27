@@ -239,7 +239,7 @@ def generate_corridors(scan_area, corridor_direction, corridor_width):
     return result_gdf
 
 
-def generate_passes(scan_area, passes_direction, passes_spacing):
+def generate_passes(scan_area, passes_direction, passes_spacing, altitude, project_to_wgs84, project_to_utm):
     """
     Generate passes (Lines) along the specified direction
     """
@@ -272,11 +272,27 @@ def generate_passes(scan_area, passes_direction, passes_spacing):
 
     # Split scan_area into passes
     resulting_passes = []
+    # for poly in scan_area.geometry:
+    #     for passe in passe_lines:
+    #         clipped = poly.intersection(passe)
+    #         if not clipped.is_empty:
+    #             resulting_passes.append(clipped)
     for poly in scan_area.geometry:
         for passe in passe_lines:
             clipped = poly.intersection(passe)
             if not clipped.is_empty:
-                resulting_passes.append(clipped)
+                if clipped.geom_type == "LineString":
+                    adjusted = adjust_linestring_altitude_simplified_terrain_follow(
+                        clipped, altitude, project_to_wgs84, project_to_utm
+                    )
+                    resulting_passes.append(adjusted)
+                elif clipped.geom_type == "MultiLineString":
+                    adjusted_lines = [
+                        adjust_linestring_altitude_simplified_terrain_follow(
+                            line, altitude, project_to_wgs84, project_to_utm)
+                        for line in clipped.geoms
+                    ]
+                    resulting_passes.append(MultiLineString(adjusted_lines))
 
     # Create a GeoDataFrame of the resulting pass
     result_gdf = gpd.GeoDataFrame(
@@ -579,59 +595,78 @@ def compute_total_mission_path(
     passes_crosshatch: gpd.GeoDataFrame,
     min_slice_index: int,
     max_slice_index: int,
-    process_debug_text: Any
+    altitude: Any,
+    project_to_wgs84: Any,
+    project_to_utm: Any,
+    max_segment_length: int = 100,
+    horizontal_tolerance: float = 1,
+    vertical_tolerance: float = 10
 ) -> LineString:
-    # process_debug_text.text("ok1 ok1 ok1")
+
     if min_slice_index >= max_slice_index:
         return (None, None, None)
-    # process_debug_text.text("ok1 ok1 ok2")
+
     (mission_passes, mission_crosshatch_passes, scanned_polygon) = compute_mission_passes(
         slices, passes, passes_crosshatch, min_slice_index, max_slice_index)
-    # process_debug_text.text("ok1 ok1 ok3")
+
     if mission_passes.empty and (mission_crosshatch_passes is None or mission_crosshatch_passes.empty):
         return (None, None, None)
-    # process_debug_text.text("ok1 ok1 ok4")
+
     # Invert every other line to create lawnmower patterns
     mission_passes_left = gpd.GeoSeries([
         reverse_geometry(geom) if geom and idx % 2 == 0 else geom
         for idx, geom in enumerate(mission_passes)
     ])
-    # process_debug_text.text("ok1 ok1 ok5")
+
     mission_passes_right = gpd.GeoSeries([
         reverse_geometry(geom) if geom and idx % 2 == 1 else geom
         for idx, geom in enumerate(mission_passes)
     ])
-    # process_debug_text.text("ok1 ok1 ok6")
+
     if mission_crosshatch_passes is not None:
         mission_crosshatch_passes_left = gpd.GeoSeries([
             reverse_geometry(geom) if geom and idx % 2 == 0 else geom
             for idx, geom in enumerate(mission_crosshatch_passes)
         ])
-        # process_debug_text.text("ok1 ok1 ok7")
+
         mission_crosshatch_passes_right = gpd.GeoSeries([
             reverse_geometry(geom) if geom and idx % 2 == 1 else geom
             for idx, geom in enumerate(mission_crosshatch_passes)
         ])
-        # process_debug_text.text("ok1 ok1 ok8")
+
     else:
         mission_crosshatch_passes_left = None
         mission_crosshatch_passes_right = None
 
-    # process_debug_text.text("ok1 ok1 ok9")
     optimal_mission_configuration = compute_optimal_mission_configuration(
         launch_points, mission_passes_left, mission_passes_right, mission_crosshatch_passes_left, mission_crosshatch_passes_right)
     if optimal_mission_configuration is None:
         raise ValueError("No valid mission configuration found.")
     (launch_point, mission_passes_optimal,
      mission_crosshatch_passes_optimal) = optimal_mission_configuration
-    # process_debug_text.text("ok1 ok1 ok10")
+
     # Recreate the full mission path by:
     # 1. Adding the launch point to the start of the mission path
     # 2. Adding the mission passes
     # 3. Adding the launch point to the end of the mission path
     # And then merging the segments
     all_coords = []
-    all_coords.append(launch_point.geometry.coords[0])
+
+    # all_coords.append(launch_point.geometry.coords[0])
+
+    go_from_launch = adjust_linestring_altitude_simplified_terrain_follow(
+        LineString([launch_point.geometry.coords[0],
+                   mission_passes_optimal.iloc[0].coords[0]]),
+        altitude,
+        project_to_wgs84,
+        project_to_utm,
+        max_segment_length,
+        horizontal_tolerance,
+        vertical_tolerance,
+    )
+    # Add intermediate waypoints of go_from_launch
+    all_coords.extend(go_from_launch.coords[:-1])
+
     for idx, geometry in mission_passes_optimal.items():
         if geometry.geom_type == "LineString":
             all_coords.extend(geometry.coords)
@@ -640,7 +675,7 @@ def compute_total_mission_path(
                 all_coords.extend(line.coords)
         else:
             raise ValueError("Invalid geometry type in mission passes.")
-    # process_debug_text.text("ok1 ok1 ok15")
+
     if mission_crosshatch_passes_optimal is not None:
         for idx, geometry in mission_crosshatch_passes_optimal.items():
             if geometry.geom_type == "LineString":
@@ -650,37 +685,49 @@ def compute_total_mission_path(
                     all_coords.extend(line.coords)
             else:
                 raise ValueError("Invalid geometry type in mission passes.")
-    # process_debug_text.text("ok1 ok1 ok20")
-    all_coords.append(launch_point.geometry.coords[0])
-    # process_debug_text.text("ok1 ok1 ok21")
+
+    go_to_launch = adjust_linestring_altitude_simplified_terrain_follow(
+        LineString([
+            all_coords[-1],
+            launch_point.geometry.coords[0]
+        ]),
+        altitude,
+        project_to_wgs84,
+        project_to_utm,
+        max_segment_length,
+        horizontal_tolerance,
+        vertical_tolerance,
+    )
+    # Add intermediate waypoints of go_to_launch
+    all_coords.extend(go_to_launch.coords[1:])
+
+    # all_coords.append(launch_point.geometry.coords[0])
+
     mission_path = LineString([ensure_3d_coordinates(coords)
                               for coords in all_coords])
-    # process_debug_text.text("ok1 ok1 ok22")
+
     return (launch_point, mission_path, scanned_polygon)
 
 
-def adjust_linestring_altitude_terrain_follow(linestring_path:LineString, altitude:float, project_to_wgs84, project_to_utm, max_segment_length=100)->LineString:
+def adjust_linestring_altitude_terrain_follow(linestring_path: LineString, altitude: float, project_to_wgs84, project_to_utm, max_segment_length=100) -> LineString:
     """
     Adjusts mission path altitudes based on terrain elevation, making altitude relative to the starting point.
     Needs to be able to project to WGS84 and then back to UTM, since mapbox probe API requires WGS84 coordinates.
     """
     elevation_probe = ElevationProbeSingleton()
-    coords = list(transform(project_to_wgs84.transform, linestring_path).coords)
+    coords = list(
+        transform(project_to_wgs84.transform, linestring_path).coords)
     adjusted_coords = []
 
-    # Get terrain altitude at the starting point
-    start_lon, start_lat, _ = coords[0]
-    start_elevation = elevation_probe.get_elevation(start_lon, start_lat)
-
     for i in range(len(coords) - 1):
-        lon1, lat1, _ = coords[i]
-        lon2, lat2, _ = coords[i + 1]
+        lon1, lat1, *_ = coords[i]
+        lon2, lat2, *_ = coords[i + 1]
         segment_length = transform(project_to_utm.transform, Point(lon1, lat1)).distance(
             transform(project_to_utm.transform, Point(lon2, lat2)))
 
         # Determine number of subdivisions
         num_subsegments = max(1, int(segment_length // max_segment_length))
-        print(f"Segment {i}: {num_subsegments} subsegments")
+        # print(f"Segment {i}: {num_subsegments} subsegments")
 
         for j in range(num_subsegments + 1):
             frac = (1.0*j) / num_subsegments
@@ -690,11 +737,10 @@ def adjust_linestring_altitude_terrain_follow(linestring_path:LineString, altitu
             # Get terrain altitude for this point
             terrain_elevation = elevation_probe.get_elevation(
                 interp_lon, interp_lat)
-            relative_altitude = altitude + \
-                (terrain_elevation - start_elevation)
+            total_altitude = altitude + terrain_elevation
 
             adjusted_coords.append(
-                (interp_lon, interp_lat, relative_altitude))
+                (interp_lon, interp_lat, total_altitude))
 
     # Create new mission path with adjusted altitude
     updated_linestring_path = transform(
@@ -702,22 +748,21 @@ def adjust_linestring_altitude_terrain_follow(linestring_path:LineString, altitu
     return updated_linestring_path
 
 
-def adjust_linestring_altitude_flat(linestring_path:LineString, altitude:float)->LineString:
+def adjust_linestring_altitude_flat(linestring_path: LineString, altitude: float) -> LineString:
     """
     Adjusts mission path altitudes by adding a constant altitude relative to the starting altitude.
     """
     coords = list(linestring_path.coords)
-    adjusted_coords = [(lon, lat, altitude) for lon, lat, _ in coords]
+    adjusted_coords = [(lon, lat, altitude) for lon, lat, *_ in coords]
     updated_linestring_path = LineString(adjusted_coords)
     return updated_linestring_path
 
 
-
-def simplify_3d_linestring(linestring_path:LineString, horizontal_tolerance: float, vertical_tolerance:float)->LineString:
+def simplify_3d_linestring(linestring_path: LineString, horizontal_tolerance: float, vertical_tolerance: float) -> LineString:
     """
     Simplifies a 3D linestring by removing intermediate points strategically,
     ensuring horizontal and vertical deviations stay within given tolerances.
-    
+
     :param points: List of (x, y, z) tuples representing the 3D linestring in UTM coordinates.
     :param horizontal_tolerance: Maximum allowed deviation in horizontal plane (x, y).
     :param vertical_tolerance: Maximum allowed deviation in vertical plane (z).
@@ -725,39 +770,49 @@ def simplify_3d_linestring(linestring_path:LineString, horizontal_tolerance: flo
     """
     points = list(linestring_path.coords)
     if len(points) < 3:
-        return points  # No simplification needed
-    
+        return LineString(points)  # No simplification needed
+
     simplified = [points[0]]
     prev_index = 0
-    
+
     for i in range(1, len(points) - 1):
-        start, candidate, end = np.array(points[prev_index]), np.array(points[i]), np.array(points[-1])
-        
+        start, candidate, end = np.array(points[prev_index]), np.array(
+            points[i]), np.array(points[-1])
+
         # Compute the expected position of the candidate on the straight line from start to end
         vec_start_end = end[:2] - start[:2]  # Horizontal direction vector
-        vec_start_end_norm = vec_start_end / np.linalg.norm(vec_start_end) if np.linalg.norm(vec_start_end) != 0 else np.array([0, 0])
-        projection = start[:2] + vec_start_end_norm * np.dot(candidate[:2] - start[:2], vec_start_end_norm)
-        
+        vec_start_end_norm = vec_start_end / \
+            np.linalg.norm(vec_start_end) if np.linalg.norm(
+                vec_start_end) != 0 else np.array([0, 0])
+        projection = start[:2] + vec_start_end_norm * \
+            np.dot(candidate[:2] - start[:2], vec_start_end_norm)
+
         horizontal_deviation = np.linalg.norm(candidate[:2] - projection)
-        
+
         if np.linalg.norm(end[:2] - start[:2]) != 0:
-            expected_z = start[2] + (end[2] - start[2]) * np.linalg.norm(candidate[:2] - start[:2]) / np.linalg.norm(end[:2] - start[:2])
+            expected_z = start[2] + (end[2] - start[2]) * np.linalg.norm(
+                candidate[:2] - start[:2]) / np.linalg.norm(end[:2] - start[:2])
         else:
             expected_z = start[2]
-        
+
         vertical_deviation = abs(candidate[2] - expected_z)
-        
+
         if horizontal_deviation > horizontal_tolerance or vertical_deviation > vertical_tolerance:
             simplified.append(points[i])
             prev_index = i  # Move reference point to this one
-    
+        # else:
+        #     print(
+        #         f"Skipped point {i} due to deviation: {horizontal_deviation:.2f}m, {vertical_deviation:.2f}m")
+
     simplified.append(points[-1])
     return LineString(simplified)
 
-def adjust_linestring_altitude_simplified_terrain_follow(linestring_path, altitude, project_to_wgs84, project_to_utm, max_segment_length=100, horizontal_tolerance=1.0, vertical_tolerance=1.0):
+
+def adjust_linestring_altitude_simplified_terrain_follow(linestring_path, altitude, project_to_wgs84, project_to_utm, max_segment_length=100, horizontal_tolerance=1.0, vertical_tolerance=10.0):
     """
     Adjusts mission path altitudes based on terrain elevation, making altitude relative to the starting point.
     Needs to be able to project to WGS84 and then back to UTM, since mapbox probe API requires WGS84 coordinates.
     """
-    adjusted = adjust_linestring_altitude_terrain_follow(linestring_path, altitude, project_to_wgs84, project_to_utm, max_segment_length)
+    adjusted = adjust_linestring_altitude_terrain_follow(
+        linestring_path, altitude, project_to_wgs84, project_to_utm, max_segment_length)
     return simplify_3d_linestring(adjusted, horizontal_tolerance, vertical_tolerance)

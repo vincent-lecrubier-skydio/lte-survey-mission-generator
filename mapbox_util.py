@@ -117,7 +117,13 @@ def reverse_geocode(lat, lon):
     Reverse geocode a latitude and longitude using Mapbox API v6.
     """
     try:
-        return GeocoderSingleton().reverse_geocode(lon, lat)[AddressType.SIMPLE]
+        addresses = GeocoderSingleton().reverse_geocode(lon, lat)
+        if AddressType.SIMPLE in addresses:
+            return addresses[AddressType.SIMPLE]
+        elif AddressType.FULL in addresses:
+            return addresses[AddressType.FULL]
+        else:
+            return "Address not found"
     except Exception as e:
         return f"Address not found: {str(e)}"
     # url = f"https://api.mapbox.com/geocoding/v6/mapbox.places/{lon},{lat}.json"

@@ -23,7 +23,7 @@ import zipfile
 import warnings
 
 from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe, adjust_linestring_altitude_terrain_follow, adjust_linestring_altitude_flat
-from mapbox_util import reverse_geocode
+from mapbox_util import reverse_geocode, ElevationProbeSingleton
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
 
@@ -106,7 +106,7 @@ def compute_mission_duration(
     mission_path: LineString,
     altitude: float,
     horizontal_speed_meters_per_second: float,
-    time_lost_per_waypoint_seconds=6.0,
+    time_lost_per_waypoint_seconds=7.0,
     ascent_speed_meters_per_second=8.0,
     descent_speed_meters_per_second=6.0,
 ) -> Union[float, None]:
@@ -125,6 +125,7 @@ def compute_mission_duration(
 
 def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
     linestring = row.geometry
+    start_altitude = linestring.coords[0][2]
     with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
         mission_proto = json.load(mission_proto_file)
         mission_proto["displayName"] = row.get("name")
@@ -176,7 +177,8 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
                                             },
                                             "z": {
                                                 "frame": 5,
-                                                "value":  point[2]
+                                                # SUCKS but limitation of mission api
+                                                "value": max(0, min(point[2]-start_altitude, 200))
                                             },
                                             "heading": {
                                                 "value": 1.5707963267948966,
@@ -284,6 +286,13 @@ def preprocess(geojson_file) -> pd.DataFrame:
                   - Add points to the geojson file, representing launch locations
             """)
 
+    elevation_probe = ElevationProbeSingleton()
+    launch_points_df['geometry'] = launch_points_df.apply(
+        lambda row: Point(row.geometry.x, row.geometry.y, elevation_probe.get_elevation(
+            row.geometry.x, row.geometry.y)),
+        axis=1
+    )
+
     # Fill missing 'name' values
     launch_points_df['address'] = launch_points_df.apply(
         lambda row: reverse_geocode(
@@ -323,7 +332,9 @@ def preprocess(geojson_file) -> pd.DataFrame:
 def process(
         geojson_file, _launch_points_df, _scan_areas_df,
         corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch,
-        altitude, terrain_follow, speed, max_mission_duration, name_template, total_bounds
+        altitude, terrain_follow, speed, max_mission_duration, name_template, total_bounds, max_segment_length: int = 100,
+    horizontal_tolerance: float = 1,
+    vertical_tolerance: float = 10
 ) -> pd.DataFrame:
     process_progress_bar = st.progress(0, text="Computing projections")
     process_debug_text = st.empty()
@@ -351,11 +362,11 @@ def process(
     process_progress_bar.progress(20, text="Generating passes")
 
     passes = generate_passes(
-        scan_areas, pass_direction, pass_spacing)
+        scan_areas, pass_direction, pass_spacing, altitude, project_to_wgs84, project_to_utm)
     if crosshatch:
         # Add crosshatch perpendicular passes
         passes_crosshatch = generate_passes(
-            scan_areas, pass_direction + 90, pass_spacing)
+            scan_areas, pass_direction + 90, pass_spacing, altitude, project_to_wgs84, project_to_utm)
     else:
         passes_crosshatch = None
 
@@ -383,8 +394,24 @@ def process(
 
             # process_debug_text.text("ok1 ok1")
 
-            (launch_point, mission_path, scanned_polygon) = compute_total_mission_path(
-                launch_points, slices, passes, passes_crosshatch, current_start, mid, process_debug_text)
+            (
+                launch_point,
+                mission_path,
+                scanned_polygon
+            ) = compute_total_mission_path(
+                launch_points,
+                slices,
+                passes,  # ok
+                passes_crosshatch,
+                current_start,
+                mid,
+                altitude,
+                project_to_wgs84,
+                project_to_utm,
+                max_segment_length,
+                horizontal_tolerance,
+                vertical_tolerance
+            )
 
             # process_debug_text.text("ok1 ok2")
 
@@ -457,7 +484,7 @@ def process(
         'geometry': [mission_path for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
         'name': [
             name_template.format(
-                index=index,
+                index=index+1,
                 date=date_now,
                 launch_point=launch_point.name,
                 start=start,
