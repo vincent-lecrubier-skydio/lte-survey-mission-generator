@@ -11,6 +11,7 @@ import geopandas as gpd
 import numpy as np
 import pyproj
 import uuid
+from mapbox_util import ElevationProbeSingleton
 
 
 # def generate_lawnmower_pattern(polygon, spacing, passes):
@@ -656,3 +657,60 @@ def compute_total_mission_path(
                               for coords in all_coords])
     # process_debug_text.text("ok1 ok1 ok22")
     return (launch_point, mission_path, scanned_polygon)
+
+
+def adjust_mission_altitude_terrain_follow(mission_path, altitude, max_segment_length=50):
+    """
+    Adjusts mission altitudes based on terrain elevation, making altitude relative to the starting point.
+
+    Parameters:
+        missions_optim (list): List of mission data tuples.
+        altitude (float): Initial fixed altitude.
+        max_segment_length (float): Maximum length of each segment (default: 10m).
+
+    Returns:
+        list: Updated missions_optim with adjusted altitudes.
+    """
+    elevation_probe = ElevationProbeSingleton()
+    coords = list(mission_path.coords)
+    adjusted_coords = []
+
+    # Get terrain altitude at the starting point
+    start_lon, start_lat, _ = coords[0]
+    start_elevation = elevation_probe.get_elevation(start_lon, start_lat)
+
+    for i in range(len(coords) - 1):
+        lon1, lat1, _ = coords[i]
+        lon2, lat2, _ = coords[i + 1]
+        segment_length = Point(lon1, lat1).distance(Point(lon2, lat2))
+
+        # Determine number of subdivisions
+        num_subsegments = max(1, int(segment_length // max_segment_length))
+
+        for j in range(num_subsegments + 1):
+            frac = j / num_subsegments
+            interp_lon = lon1 + frac * (lon2 - lon1)
+            interp_lat = lat1 + frac * (lat2 - lat1)
+
+            # Get terrain altitude for this point
+            terrain_elevation = elevation_probe.get_elevation(
+                interp_lon, interp_lat)
+            relative_altitude = altitude + \
+                (terrain_elevation - start_elevation)
+
+            adjusted_coords.append(
+                (interp_lon, interp_lat, relative_altitude))
+
+    # Create new mission path with adjusted altitude
+    updated_mission_path = LineString(adjusted_coords)
+    return updated_mission_path
+
+
+def adjust_mission_altitude_flat(mission_path, altitude):
+    """
+    Adjusts mission altitudes by adding a constant altitude relative to the starting altitude.
+    """
+    coords = list(mission_path.coords)
+    adjusted_coords = [(lon, lat, altitude) for lon, lat, _ in coords]
+    updated_mission_path = LineString(adjusted_coords)
+    return updated_mission_path

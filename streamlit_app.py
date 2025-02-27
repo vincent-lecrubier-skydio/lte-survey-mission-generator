@@ -22,7 +22,7 @@ import math
 import zipfile
 import warnings
 
-from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe
+from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe, adjust_mission_altitude_terrain_follow, adjust_mission_altitude_flat
 from mapbox_util import reverse_geocode
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
@@ -277,7 +277,7 @@ def preprocess(geojson_file) -> pd.DataFrame:
     launch_points_df = df[df.geometry.type == "Point"].copy()
     if launch_points_df is None or len(launch_points_df) <= 0:
         preprocess_progress_bar.empty()
-        raise ValueError(f"""
+        raise ValueError("""
                 No valid launch points found in the uploaded file.
                 
                 Suggested fixes:
@@ -301,7 +301,7 @@ def preprocess(geojson_file) -> pd.DataFrame:
     scan_areas_df = df[df.geometry.type == "Polygon"].copy()
     if scan_areas_df is None or len(scan_areas_df) <= 0:
         preprocess_progress_bar.empty()
-        raise ValueError(f"""
+        raise ValueError("""
                 No valid scan areas found in the uploaded file.
                 
                 Suggested fixes:
@@ -323,7 +323,7 @@ def preprocess(geojson_file) -> pd.DataFrame:
 def process(
         geojson_file, _launch_points_df, _scan_areas_df,
         corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch,
-        altitude, speed, max_mission_duration, name_template, total_bounds
+        altitude, terrain_follow, speed, max_mission_duration, name_template, total_bounds
 ) -> pd.DataFrame:
     process_progress_bar = st.progress(0, text="Computing projections")
     process_debug_text = st.empty()
@@ -449,7 +449,11 @@ def process(
     date_now = datetime.now().isoformat(timespec='seconds')
 
     missions = gpd.GeoDataFrame({
-        'geometry': [mission_path for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        'geometry':
+        [adjust_mission_altitude_terrain_follow(mission_path, altitude) for (
+            start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim]
+        if terrain_follow
+        else [adjust_mission_altitude_flat(mission_path, altitude) for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
         'name': [
             name_template.format(
                 index=index,
@@ -592,6 +596,8 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
         st.markdown(
             f"Altitude = {altitude:.0f}m = {altitude*3.28084:.0f}ft = {altitude*1.09361:.0f}yd = {altitude/1609:.2f} Miles = {altitude/1852:.2f} Nautical Miles")
 
+        terrain_follow = st.toggle("Terrain Follow", value=True)
+
     with st.expander("Return Settings"):
 
         rtx_height = st.number_input(
@@ -641,9 +647,11 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             pass_spacing,
             pass_crosshatch,
             altitude,
+            terrain_follow,
             speed,
             max_mission_duration,
-            name_template, total_bounds
+            name_template,
+            total_bounds
         )
     except ValueError as e:
         st.error(e)
@@ -801,10 +809,10 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 
         mission_duration_chart = alt.Chart(missions).mark_bar().encode(
             x=alt.X("duration", bin=alt.Bin(maxbins=100, extent=[0, max_mission_duration*1.2]),
-                    title=f"Mission duration (s)"),
+                    title="Mission duration (s)"),
             y=alt.Y('count()', title='Number of Missions')
         ).properties(
-            title=f"Histogram of missions durations",
+            title="Histogram of missions durations",
             width=600,
             height=400
         )
@@ -828,10 +836,10 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 
         range_chart = alt.Chart(waypoints).mark_bar().encode(
             x=alt.X("range", bin=alt.Bin(maxbins=100, extent=[0, waypoints['range'].max()]),
-                    title=f"Range of waypoint (m)"),
+                    title="Range of waypoint (m)"),
             y=alt.Y('count()', title='Number of waypoints')
         ).properties(
-            title=f"Histogram of waypoint ranges from launch point",
+            title="Histogram of waypoint ranges from launch point",
             width=600,
             height=400
         )
@@ -839,10 +847,10 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 
         waypoints_chart = alt.Chart(waypoints).mark_bar().encode(
             x=alt.X("mission_index", bin=alt.Bin(step=1, extent=[0, waypoints['mission_index'].max()+1]),
-                    title=f"Mission index"),
+                    title="Mission index"),
             y=alt.Y('count()', title='Number of waypoints')
         ).properties(
-            title=f"Number of waypoints per mission",
+            title="Number of waypoints per mission",
             width=600,
             height=400
         )
