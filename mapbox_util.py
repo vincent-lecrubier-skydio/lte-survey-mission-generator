@@ -117,7 +117,7 @@ def reverse_geocode(lat, lon):
     Reverse geocode a latitude and longitude using Mapbox API v6.
     """
     try:
-        return GeocoderSingleton().reverse_geocode(lon, lat)[AddressType.FULL]
+        return GeocoderSingleton().reverse_geocode(lon, lat)[AddressType.SIMPLE]
     except Exception as e:
         return f"Address not found: {str(e)}"
     # url = f"https://api.mapbox.com/geocoding/v6/mapbox.places/{lon},{lat}.json"
@@ -283,10 +283,10 @@ class ElevationProbeSingleton:
         y = int(y_offset * width)  # Assuming square tiles
 
         # Get RGB values
-        r, g, b, _ = image_data[y, x]
+        r, g, b = image_data[y, x]
 
         # Convert to elevation using Mapbox formula
-        return -10000 + (r * 256 * 256 + g * 256 + b) * 0.1
+        return -10000.0 + (r * 256.0 * 256.0 + g * 256.0 + b) * 0.1
 
     def _load_tile(self, tile: MapboxTile) -> tuple[np.ndarray, int, int]:
         """Load and parse terrain-rgb tile from Mapbox"""
@@ -299,6 +299,7 @@ class ElevationProbeSingleton:
 
             # Load image data
             img = Image.open(io.BytesIO(response.content))
+            img = img.convert("RGB")
             width, height = img.size
 
             # Convert to numpy array for efficient processing

@@ -659,20 +659,13 @@ def compute_total_mission_path(
     return (launch_point, mission_path, scanned_polygon)
 
 
-def adjust_mission_altitude_terrain_follow(mission_path, altitude, max_segment_length=50):
+def adjust_mission_altitude_terrain_follow(mission_path, altitude, project_to_wgs84, project_to_utm, max_segment_length=100):
     """
-    Adjusts mission altitudes based on terrain elevation, making altitude relative to the starting point.
-
-    Parameters:
-        missions_optim (list): List of mission data tuples.
-        altitude (float): Initial fixed altitude.
-        max_segment_length (float): Maximum length of each segment (default: 10m).
-
-    Returns:
-        list: Updated missions_optim with adjusted altitudes.
+    Adjusts mission path altitudes based on terrain elevation, making altitude relative to the starting point.
+    Needs to be able to project to WGS84 and then back to UTM, since mapbox probe API requires WGS84 coordinates.
     """
     elevation_probe = ElevationProbeSingleton()
-    coords = list(mission_path.coords)
+    coords = list(transform(project_to_wgs84.transform, mission_path).coords)
     adjusted_coords = []
 
     # Get terrain altitude at the starting point
@@ -682,13 +675,15 @@ def adjust_mission_altitude_terrain_follow(mission_path, altitude, max_segment_l
     for i in range(len(coords) - 1):
         lon1, lat1, _ = coords[i]
         lon2, lat2, _ = coords[i + 1]
-        segment_length = Point(lon1, lat1).distance(Point(lon2, lat2))
+        segment_length = transform(project_to_utm.transform, Point(lon1, lat1)).distance(
+            transform(project_to_utm.transform, Point(lon2, lat2)))
 
         # Determine number of subdivisions
         num_subsegments = max(1, int(segment_length // max_segment_length))
+        print(f"Segment {i}: {num_subsegments} subsegments")
 
         for j in range(num_subsegments + 1):
-            frac = j / num_subsegments
+            frac = (1.0*j) / num_subsegments
             interp_lon = lon1 + frac * (lon2 - lon1)
             interp_lat = lat1 + frac * (lat2 - lat1)
 
@@ -702,13 +697,14 @@ def adjust_mission_altitude_terrain_follow(mission_path, altitude, max_segment_l
                 (interp_lon, interp_lat, relative_altitude))
 
     # Create new mission path with adjusted altitude
-    updated_mission_path = LineString(adjusted_coords)
+    updated_mission_path = transform(
+        project_to_utm.transform, LineString(adjusted_coords))
     return updated_mission_path
 
 
 def adjust_mission_altitude_flat(mission_path, altitude):
     """
-    Adjusts mission altitudes by adding a constant altitude relative to the starting altitude.
+    Adjusts mission path altitudes by adding a constant altitude relative to the starting altitude.
     """
     coords = list(mission_path.coords)
     adjusted_coords = [(lon, lat, altitude) for lon, lat, _ in coords]
