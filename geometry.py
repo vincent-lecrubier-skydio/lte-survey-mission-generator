@@ -580,50 +580,50 @@ def compute_total_mission_path(
     max_slice_index: int,
     process_debug_text: Any
 ) -> LineString:
-    process_debug_text.text("ok1 ok1 ok1")
+    # process_debug_text.text("ok1 ok1 ok1")
     if min_slice_index >= max_slice_index:
         return (None, None, None)
-    process_debug_text.text("ok1 ok1 ok2")
+    # process_debug_text.text("ok1 ok1 ok2")
     (mission_passes, mission_crosshatch_passes, scanned_polygon) = compute_mission_passes(
         slices, passes, passes_crosshatch, min_slice_index, max_slice_index)
-    process_debug_text.text("ok1 ok1 ok3")
+    # process_debug_text.text("ok1 ok1 ok3")
     if mission_passes.empty and (mission_crosshatch_passes is None or mission_crosshatch_passes.empty):
         return (None, None, None)
-    process_debug_text.text("ok1 ok1 ok4")
+    # process_debug_text.text("ok1 ok1 ok4")
     # Invert every other line to create lawnmower patterns
     mission_passes_left = gpd.GeoSeries([
         reverse_geometry(geom) if geom and idx % 2 == 0 else geom
         for idx, geom in enumerate(mission_passes)
     ])
-    process_debug_text.text("ok1 ok1 ok5")
+    # process_debug_text.text("ok1 ok1 ok5")
     mission_passes_right = gpd.GeoSeries([
         reverse_geometry(geom) if geom and idx % 2 == 1 else geom
         for idx, geom in enumerate(mission_passes)
     ])
-    process_debug_text.text("ok1 ok1 ok6")
+    # process_debug_text.text("ok1 ok1 ok6")
     if mission_crosshatch_passes is not None:
         mission_crosshatch_passes_left = gpd.GeoSeries([
             reverse_geometry(geom) if geom and idx % 2 == 0 else geom
             for idx, geom in enumerate(mission_crosshatch_passes)
         ])
-        process_debug_text.text("ok1 ok1 ok7")
+        # process_debug_text.text("ok1 ok1 ok7")
         mission_crosshatch_passes_right = gpd.GeoSeries([
             reverse_geometry(geom) if geom and idx % 2 == 1 else geom
             for idx, geom in enumerate(mission_crosshatch_passes)
         ])
-        process_debug_text.text("ok1 ok1 ok8")
+        # process_debug_text.text("ok1 ok1 ok8")
     else:
         mission_crosshatch_passes_left = None
         mission_crosshatch_passes_right = None
 
-    process_debug_text.text("ok1 ok1 ok9")
+    # process_debug_text.text("ok1 ok1 ok9")
     optimal_mission_configuration = compute_optimal_mission_configuration(
         launch_points, mission_passes_left, mission_passes_right, mission_crosshatch_passes_left, mission_crosshatch_passes_right)
     if optimal_mission_configuration is None:
         raise ValueError("No valid mission configuration found.")
     (launch_point, mission_passes_optimal,
      mission_crosshatch_passes_optimal) = optimal_mission_configuration
-    process_debug_text.text("ok1 ok1 ok10")
+    # process_debug_text.text("ok1 ok1 ok10")
     # Recreate the full mission path by:
     # 1. Adding the launch point to the start of the mission path
     # 2. Adding the mission passes
@@ -639,7 +639,7 @@ def compute_total_mission_path(
                 all_coords.extend(line.coords)
         else:
             raise ValueError("Invalid geometry type in mission passes.")
-    process_debug_text.text("ok1 ok1 ok15")
+    # process_debug_text.text("ok1 ok1 ok15")
     if mission_crosshatch_passes_optimal is not None:
         for idx, geometry in mission_crosshatch_passes_optimal.items():
             if geometry.geom_type == "LineString":
@@ -649,10 +649,10 @@ def compute_total_mission_path(
                     all_coords.extend(line.coords)
             else:
                 raise ValueError("Invalid geometry type in mission passes.")
-    process_debug_text.text("ok1 ok1 ok20")
+    # process_debug_text.text("ok1 ok1 ok20")
     all_coords.append(launch_point.geometry.coords[0])
-    process_debug_text.text("ok1 ok1 ok21")
+    # process_debug_text.text("ok1 ok1 ok21")
     mission_path = LineString([ensure_3d_coordinates(coords)
                               for coords in all_coords])
-    process_debug_text.text("ok1 ok1 ok22")
+    # process_debug_text.text("ok1 ok1 ok22")
     return (launch_point, mission_path, scanned_polygon)

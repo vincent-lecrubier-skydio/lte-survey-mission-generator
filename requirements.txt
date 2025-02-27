@@ -8,8 +8,10 @@ streamlit-folium==0.23.2
 pydeck==0.9.1
 pandas==2.2.3
 matplotlib==3.9.2
+mapbox==0.18.1
 pykml==0.2.0
 geopy==2.4.1
 scikit-learn==1.5.2
 contextily==1.6.2
 geopandas==1.0.1
+pillow==11.1.0

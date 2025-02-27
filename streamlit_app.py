@@ -21,47 +21,11 @@ import colorsys
 import math
 import zipfile
 import warnings
-import requests
 
 from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe
+from mapbox_util import reverse_geocode
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
-mapbox_token = "pk.eyJ1Ijoic2t5ZGlvLXRlYW0iLCJhIjoiY20zbW9mYmZ0MGpsMTJpcHl3bWhsbm5rcSJ9.2bTFNXUX0RrFKLiH8EgW_g"
-
-
-def reverse_geocode(lat, lon):
-    """
-    Reverse geocode a latitude and longitude using Mapbox API v6.
-    """
-    # url = f"https://api.mapbox.com/geocoding/v6/mapbox.places/{lon},{lat}.json"
-    url = f"https://api.mapbox.com/search/geocode/v6/reverse?longitude={lon}&latitude={lat}"
-    params = {
-        'access_token': mapbox_token,
-        'types': 'address,place',  # Specify the types of places to include
-        'limit': 1                # Number of results to return
-    }
-    response = requests.get(url, timeout=20, params=params)
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            if data.get('features') and isinstance(data['features'], list) and len(data['features']) > 0:
-                properties = data['features'][0].get('properties', {})
-                context = properties.get('context', {})
-
-                if isinstance(context, dict):
-                    address_name = context.get('address', {}).get('name')
-                    place_name = context.get('place', {}).get('name')
-
-                    if address_name and place_name:
-                        return f"{address_name}, {place_name}"
-
-                return properties.get('name', "Address not found")
-            else:
-                return "Address not found"
-        except (ValueError, KeyError, TypeError):
-            return "Invalid response format"
-    else:
-        return "Address error"
 
 
 def generate_random_saturated_color(index):
@@ -412,23 +376,23 @@ def process(
         best_end = None
         best_reward = float('-inf')
 
-        process_debug_text.text("ok1")
+        # process_debug_text.text("ok1")
 
         while low <= high:
             mid = (low + high) // 2
 
-            process_debug_text.text("ok1 ok1")
+            # process_debug_text.text("ok1 ok1")
 
             (launch_point, mission_path, scanned_polygon) = compute_total_mission_path(
                 launch_points, slices, passes, passes_crosshatch, current_start, mid, process_debug_text)
 
-            process_debug_text.text("ok1 ok2")
+            # process_debug_text.text("ok1 ok2")
 
             mission_duration = compute_mission_duration(
                 mission_path, altitude, speed)
             reward = mid-current_start
 
-            process_debug_text.text("ok1 ok3")
+            # process_debug_text.text("ok1 ok3")
             # st.text(f"{current_start}, {mid}: {mission_duration}")
 
             if mission_duration is None:  # Invalid range, increase size
@@ -445,9 +409,9 @@ def process(
                     best_end = mid
                 low = mid + 1  # Explore larger ranges
 
-            process_debug_text.text("ok1 ok4")
+            # process_debug_text.text("ok1 ok4")
 
-        process_debug_text.text("ok2")
+        # process_debug_text.text("ok2")
         # If no valid range is found, terminate the loop and report problem
         if best_end is None:
             process_progress_bar.empty()

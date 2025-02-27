@@ -1,18 +1,17 @@
 # mypy: allow-untyped-defs
 
-from __future__ import annotations
-
 import enum
 import io
 import math
 import typing as T
-# from unittest import mock
-
+import os
 import numpy as np
 import requests
-# from flask import current_app as app
 from mapbox import Geocoder
 from PIL import Image
+
+mapbox_access_token = os.environ['MAPBOX_TOKEN']
+mapbox_host = "api.mapbox.com"
 
 
 class GeocoderSingletonException(Exception):
@@ -49,27 +48,29 @@ class GeocoderSingleton:
     _instance: T.Any = None
 
     def __new__(cls, access_token=None, host=None):
-        if not app.config["MAPBOX_CONNECTABLE"]:
-            # On-Prem deployments by default should not hit Mapbox
-            # Prod should not be hitting this case
-            raise MapboxNotConnectableException()
+        # if not app.config["MAPBOX_CONNECTABLE"]:
+        #     # On-Prem deployments by default should not hit Mapbox
+        #     # Prod should not be hitting this case
+        #     raise MapboxNotConnectableException()
 
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             # Initialize the Geocoder instance
             if not access_token:
                 # if no token provided explicitly, fall back to app config
-                access_token = app.config["MAPBOX_ACCESS_TOKEN"]
+                access_token = mapbox_access_token
             if not host:
-                host = app.config["MAPBOX_HOST"]
-            cls._instance.geocoder = Geocoder(access_token=access_token, host=host)  # type: ignore[attr-defined]
+                host = mapbox_host
+            cls._instance.geocoder = Geocoder(
+                access_token=access_token, host=host)  # type: ignore[attr-defined]
         return cls._instance
 
     def reverse_geocode(self, longitude, latitude) -> T.Dict[AddressType, str]:
         """
         Returns a dictionary of address types (simple and full) for a given longitude and latitude
         """
-        response = self.geocoder.reverse(lon=longitude, lat=latitude)  # type: ignore[attr-defined]
+        response = self._instance.geocoder.reverse(
+            lon=longitude, lat=latitude)  # type: ignore[attr-defined]
         addresses = {}
 
         # Check if the request was successful
@@ -93,13 +94,15 @@ class GeocoderSingleton:
             ):
                 house_number = feature.get("address", "")
                 street_name = feature.get("text", "")
-                addresses[AddressType.SIMPLE] = f"{house_number} {street_name}".strip()
+                addresses[AddressType.SIMPLE] = f"{house_number} {street_name}".strip(
+                )
 
             addresses[AddressType.FULL] = features[0]["place_name"]
             return addresses
 
         else:
-            raise GeocoderSingletonException(f"Geocoder Error: {response.status_code}")
+            raise GeocoderSingletonException(
+                f"Geocoder Error: {response.status_code}")
 
     @classmethod
     def reset_instance(cls):
@@ -107,6 +110,45 @@ class GeocoderSingleton:
 
 
 EPSILON = 1e-14
+
+
+def reverse_geocode(lat, lon):
+    """
+    Reverse geocode a latitude and longitude using Mapbox API v6.
+    """
+    try:
+        return GeocoderSingleton().reverse_geocode(lon, lat)[AddressType.FULL]
+    except Exception as e:
+        return f"Address not found: {str(e)}"
+    # url = f"https://api.mapbox.com/geocoding/v6/mapbox.places/{lon},{lat}.json"
+    # url = f"https://api.mapbox.com/search/geocode/v6/reverse?longitude={lon}&latitude={lat}"
+    # params = {
+    #     'access_token': mapbox_token,
+    #     'types': 'address,place',  # Specify the types of places to include
+    #     'limit': 1                # Number of results to return
+    # }
+    # response = requests.get(url, timeout=20, params=params)
+    # if response.status_code == 200:
+    #     try:
+    #         data = response.json()
+    #         if data.get('features') and isinstance(data['features'], list) and len(data['features']) > 0:
+    #             properties = data['features'][0].get('properties', {})
+    #             context = properties.get('context', {})
+
+    #             if isinstance(context, dict):
+    #                 address_name = context.get('address', {}).get('name')
+    #                 place_name = context.get('place', {}).get('name')
+
+    #                 if address_name and place_name:
+    #                     return f"{address_name}, {place_name}"
+
+    #             return properties.get('name', "Address not found")
+    #         else:
+    #             return "Address not found"
+    #     except (ValueError, KeyError, TypeError):
+    #         return "Invalid response format"
+    # else:
+    #     return "Address error"
 
 
 class InvalidLatitudeError(Exception):
@@ -133,9 +175,11 @@ class MapboxTile:
         sinlat = math.sin(math.radians(lat))
 
         try:
-            y = 0.5 - 0.25 * math.log((1.0 + sinlat) / (1.0 - sinlat)) / math.pi
+            y = 0.5 - 0.25 * \
+                math.log((1.0 + sinlat) / (1.0 - sinlat)) / math.pi
         except (ValueError, ZeroDivisionError):
-            raise InvalidLatitudeError("Y can not be computed: lat={!r}".format(lat))
+            raise InvalidLatitudeError(
+                "Y can not be computed: lat={!r}".format(lat))
         else:
             return x, y
 
@@ -217,16 +261,16 @@ class ElevationProbeSingleton:
     cache: dict
 
     def __new__(cls, access_token=None):
-        if not app.config["MAPBOX_CONNECTABLE"]:
-            # On-Prem deployments by default should not hit Mapbox
-            # Prod should not be hitting this case
-            raise MapboxNotConnectableException()
+        # if not app.config["MAPBOX_CONNECTABLE"]:
+        #     # On-Prem deployments by default should not hit Mapbox
+        #     # Prod should not be hitting this case
+        #     raise MapboxNotConnectableException()
 
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             # Initialize the probe
             if not access_token:
-                access_token = app.config["MAPBOX_ACCESS_TOKEN"]
+                access_token = mapbox_access_token
             cls._instance.access_token = access_token
             cls._instance.cache = {}
         return cls._instance
@@ -263,9 +307,11 @@ class ElevationProbeSingleton:
             return image_data, width, height
 
         except requests.exceptions.RequestException as e:
-            raise ElevationProbeSingletonException(f"Failed to load terrain tile: {str(e)}")
+            raise ElevationProbeSingletonException(
+                f"Failed to load terrain tile: {str(e)}")
         except Exception as e:
-            raise ElevationProbeSingletonException(f"Error processing terrain tile: {str(e)}")
+            raise ElevationProbeSingletonException(
+                f"Error processing terrain tile: {str(e)}")
 
     def get_elevation(self, longitude: float, latitude: float, zoom: int = DEFAULT_ZOOM) -> float:
         """
@@ -283,7 +329,8 @@ class ElevationProbeSingleton:
             ElevationProbeSingletonException: If elevation query fails
         """
         try:
-            tile, x_offset, y_offset = MapboxTile.from_lon_lat(longitude, latitude, zoom)
+            tile, x_offset, y_offset = MapboxTile.from_lon_lat(
+                longitude, latitude, zoom)
 
             # Check cache first
             if tile.key not in self.cache:
@@ -293,7 +340,8 @@ class ElevationProbeSingleton:
             return self._read_elevation(image_data, width, x_offset, y_offset)
 
         except Exception as e:
-            raise ElevationProbeSingletonException(f"Elevation query failed: {str(e)}")
+            raise ElevationProbeSingletonException(
+                f"Elevation query failed: {str(e)}")
 
     @classmethod
     def reset_instance(cls):
