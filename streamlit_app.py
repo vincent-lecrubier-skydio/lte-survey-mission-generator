@@ -22,7 +22,7 @@ import math
 import zipfile
 import warnings
 
-from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe, adjust_mission_altitude_terrain_follow, adjust_mission_altitude_flat
+from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe, adjust_linestring_altitude_terrain_follow, adjust_linestring_altitude_flat
 from mapbox_util import reverse_geocode
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
@@ -450,11 +450,11 @@ def process(
 
     missions = gpd.GeoDataFrame({
         # 'geometry':
-        # [adjust_mission_altitude_terrain_follow(mission_path, altitude,project_to_wgs84,project_to_utm) for (
+        # [adjust_linestring_altitude_terrain_follow(mission_path, altitude,project_to_wgs84,project_to_utm) for (
         #     start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim]
         # if terrain_follow
-        # else [adjust_mission_altitude_flat(mission_path, altitude) for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
-        'geometry':[mission_path for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        # else [adjust_linestring_altitude_flat(mission_path, altitude) for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
+        'geometry': [mission_path for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
         'name': [
             name_template.format(
                 index=index,
@@ -544,7 +544,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
     st.markdown("## 2. Customize parameters")
 
     name_template = st.text_input(
-        "Mission name template:", value="LTE Scan - {date} - {index} - {duration}s - {launch_point}")
+        "Mission name template:", value="LTE Scan - {date} - Flight {index} - {duration}s - {launch_point}")
 
     with st.expander("Mission Planning Parameters"):
 
@@ -556,7 +556,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             We compute the size of each slice such that each mission is as long as possible, but no more than target duration.
             We then fly the drone at specific speed and altitude along these passes.
             """)
-        
+
         terrain_follow = st.toggle("Terrain Follow", value=True)
 
         max_mission_duration = st.number_input(

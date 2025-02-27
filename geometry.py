@@ -659,13 +659,13 @@ def compute_total_mission_path(
     return (launch_point, mission_path, scanned_polygon)
 
 
-def adjust_mission_altitude_terrain_follow(mission_path, altitude, project_to_wgs84, project_to_utm, max_segment_length=100):
+def adjust_linestring_altitude_terrain_follow(linestring_path:LineString, altitude:float, project_to_wgs84, project_to_utm, max_segment_length=100)->LineString:
     """
     Adjusts mission path altitudes based on terrain elevation, making altitude relative to the starting point.
     Needs to be able to project to WGS84 and then back to UTM, since mapbox probe API requires WGS84 coordinates.
     """
     elevation_probe = ElevationProbeSingleton()
-    coords = list(transform(project_to_wgs84.transform, mission_path).coords)
+    coords = list(transform(project_to_wgs84.transform, linestring_path).coords)
     adjusted_coords = []
 
     # Get terrain altitude at the starting point
@@ -697,16 +697,67 @@ def adjust_mission_altitude_terrain_follow(mission_path, altitude, project_to_wg
                 (interp_lon, interp_lat, relative_altitude))
 
     # Create new mission path with adjusted altitude
-    updated_mission_path = transform(
+    updated_linestring_path = transform(
         project_to_utm.transform, LineString(adjusted_coords))
-    return updated_mission_path
+    return updated_linestring_path
 
 
-def adjust_mission_altitude_flat(mission_path, altitude):
+def adjust_linestring_altitude_flat(linestring_path:LineString, altitude:float)->LineString:
     """
     Adjusts mission path altitudes by adding a constant altitude relative to the starting altitude.
     """
-    coords = list(mission_path.coords)
+    coords = list(linestring_path.coords)
     adjusted_coords = [(lon, lat, altitude) for lon, lat, _ in coords]
-    updated_mission_path = LineString(adjusted_coords)
-    return updated_mission_path
+    updated_linestring_path = LineString(adjusted_coords)
+    return updated_linestring_path
+
+
+
+def simplify_3d_linestring(linestring_path:LineString, horizontal_tolerance: float, vertical_tolerance:float)->LineString:
+    """
+    Simplifies a 3D linestring by removing intermediate points strategically,
+    ensuring horizontal and vertical deviations stay within given tolerances.
+    
+    :param points: List of (x, y, z) tuples representing the 3D linestring in UTM coordinates.
+    :param horizontal_tolerance: Maximum allowed deviation in horizontal plane (x, y).
+    :param vertical_tolerance: Maximum allowed deviation in vertical plane (z).
+    :return: Simplified list of (x, y, z) tuples.
+    """
+    points = list(linestring_path.coords)
+    if len(points) < 3:
+        return points  # No simplification needed
+    
+    simplified = [points[0]]
+    prev_index = 0
+    
+    for i in range(1, len(points) - 1):
+        start, candidate, end = np.array(points[prev_index]), np.array(points[i]), np.array(points[-1])
+        
+        # Compute the expected position of the candidate on the straight line from start to end
+        vec_start_end = end[:2] - start[:2]  # Horizontal direction vector
+        vec_start_end_norm = vec_start_end / np.linalg.norm(vec_start_end) if np.linalg.norm(vec_start_end) != 0 else np.array([0, 0])
+        projection = start[:2] + vec_start_end_norm * np.dot(candidate[:2] - start[:2], vec_start_end_norm)
+        
+        horizontal_deviation = np.linalg.norm(candidate[:2] - projection)
+        
+        if np.linalg.norm(end[:2] - start[:2]) != 0:
+            expected_z = start[2] + (end[2] - start[2]) * np.linalg.norm(candidate[:2] - start[:2]) / np.linalg.norm(end[:2] - start[:2])
+        else:
+            expected_z = start[2]
+        
+        vertical_deviation = abs(candidate[2] - expected_z)
+        
+        if horizontal_deviation > horizontal_tolerance or vertical_deviation > vertical_tolerance:
+            simplified.append(points[i])
+            prev_index = i  # Move reference point to this one
+    
+    simplified.append(points[-1])
+    return LineString(simplified)
+
+def adjust_linestring_altitude_simplified_terrain_follow(linestring_path, altitude, project_to_wgs84, project_to_utm, max_segment_length=100, horizontal_tolerance=1.0, vertical_tolerance=1.0):
+    """
+    Adjusts mission path altitudes based on terrain elevation, making altitude relative to the starting point.
+    Needs to be able to project to WGS84 and then back to UTM, since mapbox probe API requires WGS84 coordinates.
+    """
+    adjusted = adjust_linestring_altitude_terrain_follow(linestring_path, altitude, project_to_wgs84, project_to_utm, max_segment_length)
+    return simplify_3d_linestring(adjusted, horizontal_tolerance, vertical_tolerance)
