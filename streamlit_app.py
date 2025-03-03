@@ -23,7 +23,7 @@ import zipfile
 import warnings
 
 from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe
-from mapbox_util import reverse_geocode
+from mapbox_util import reverse_geocode, ElevationProbeSingleton
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
 
@@ -106,7 +106,7 @@ def compute_mission_duration(
     mission_path: LineString,
     altitude: float,
     horizontal_speed_meters_per_second: float,
-    time_lost_per_waypoint_seconds=6.0,
+    time_lost_per_waypoint_seconds=7.0,
     ascent_speed_meters_per_second=8.0,
     descent_speed_meters_per_second=6.0,
 ) -> Union[float, None]:
@@ -125,6 +125,7 @@ def compute_mission_duration(
 
 def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
     linestring = row.geometry
+    start_altitude = linestring.coords[0][2]
     with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
         mission_proto = json.load(mission_proto_file)
         mission_proto["displayName"] = row.get("name")
@@ -176,7 +177,8 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
                                             },
                                             "z": {
                                                 "frame": 5,
-                                                "value": altitude  # m = 200ft
+                                                # SUCKS but limitation of mission api
+                                                "value": max(0, min(point[2]-start_altitude, 200))
                                             },
                                             "heading": {
                                                 "value": 1.5707963267948966,
@@ -221,7 +223,8 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
                     "isSkippable": False
                 }
             }
-            for point in linestring.coords
+            # For all points in the linestring except first and last (which are exactly launch point)
+            for point in linestring.coords[1:-1]
         ]
 
         # return json string
@@ -277,12 +280,19 @@ def preprocess(geojson_file) -> pd.DataFrame:
     launch_points_df = df[df.geometry.type == "Point"].copy()
     if launch_points_df is None or len(launch_points_df) <= 0:
         preprocess_progress_bar.empty()
-        raise ValueError(f"""
+        raise ValueError("""
                 No valid launch points found in the uploaded file.
                 
                 Suggested fixes:
                   - Add points to the geojson file, representing launch locations
             """)
+
+    elevation_probe = ElevationProbeSingleton()
+    launch_points_df['geometry'] = launch_points_df.apply(
+        lambda row: Point(row.geometry.x, row.geometry.y, elevation_probe.get_elevation(
+            row.geometry.x, row.geometry.y)),
+        axis=1
+    )
 
     # Fill missing 'name' values
     launch_points_df['address'] = launch_points_df.apply(
@@ -301,7 +311,7 @@ def preprocess(geojson_file) -> pd.DataFrame:
     scan_areas_df = df[df.geometry.type == "Polygon"].copy()
     if scan_areas_df is None or len(scan_areas_df) <= 0:
         preprocess_progress_bar.empty()
-        raise ValueError(f"""
+        raise ValueError("""
                 No valid scan areas found in the uploaded file.
                 
                 Suggested fixes:
@@ -323,7 +333,9 @@ def preprocess(geojson_file) -> pd.DataFrame:
 def process(
         geojson_file, _launch_points_df, _scan_areas_df,
         corridor_direction, corridor_width, pass_direction, pass_spacing, crosshatch,
-        altitude, speed, max_mission_duration, name_template, total_bounds
+        altitude, terrain_follow, speed, max_mission_duration, name_template, total_bounds, max_segment_length: int = 100,
+    horizontal_tolerance: float = 1,
+    vertical_tolerance: float = 10
 ) -> pd.DataFrame:
     process_progress_bar = st.progress(0, text="Computing projections")
     process_debug_text = st.empty()
@@ -351,11 +363,11 @@ def process(
     process_progress_bar.progress(20, text="Generating passes")
 
     passes = generate_passes(
-        scan_areas, pass_direction, pass_spacing)
+        scan_areas, pass_direction, pass_spacing, altitude, project_to_wgs84, project_to_utm)
     if crosshatch:
         # Add crosshatch perpendicular passes
         passes_crosshatch = generate_passes(
-            scan_areas, pass_direction + 90, pass_spacing)
+            scan_areas, pass_direction + 90, pass_spacing, altitude, project_to_wgs84, project_to_utm)
     else:
         passes_crosshatch = None
 
@@ -383,8 +395,24 @@ def process(
 
             # process_debug_text.text("ok1 ok1")
 
-            (launch_point, mission_path, scanned_polygon) = compute_total_mission_path(
-                launch_points, slices, passes, passes_crosshatch, current_start, mid, process_debug_text)
+            (
+                launch_point,
+                mission_path,
+                scanned_polygon
+            ) = compute_total_mission_path(
+                launch_points,
+                slices,
+                passes,  # ok
+                passes_crosshatch,
+                current_start,
+                mid,
+                altitude,
+                project_to_wgs84,
+                project_to_utm,
+                max_segment_length,
+                horizontal_tolerance,
+                vertical_tolerance
+            )
 
             # process_debug_text.text("ok1 ok2")
 
@@ -449,10 +477,15 @@ def process(
     date_now = datetime.now().isoformat(timespec='seconds')
 
     missions = gpd.GeoDataFrame({
+        # 'geometry':
+        # [adjust_linestring_altitude_terrain_follow(mission_path, altitude,project_to_wgs84,project_to_utm) for (
+        #     start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim]
+        # if terrain_follow
+        # else [adjust_linestring_altitude_flat(mission_path, altitude) for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
         'geometry': [mission_path for (start, end, launch_point, mission_path, mission_scanned_polygon, mission_duration) in missions_optim],
         'name': [
             name_template.format(
-                index=index,
+                index=index+1,
                 date=date_now,
                 launch_point=launch_point.name,
                 start=start,
@@ -539,7 +572,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
     st.markdown("## 2. Customize parameters")
 
     name_template = st.text_input(
-        "Mission name template:", value="LTE Scan | {date} | {launch_point} | #{index} | {duration}s")
+        "Mission name template:", value="LTE Scan - {date} - Flight {index} - {duration}s - {launch_point}")
 
     with st.expander("Mission Planning Parameters"):
 
@@ -551,6 +584,8 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             We compute the size of each slice such that each mission is as long as possible, but no more than target duration.
             We then fly the drone at specific speed and altitude along these passes.
             """)
+
+        terrain_follow = st.toggle("Terrain Follow", value=True)
 
         max_mission_duration = st.number_input(
             "Target mission duration, in seconds:", min_value=0, value=20*60)
@@ -641,9 +676,11 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             pass_spacing,
             pass_crosshatch,
             altitude,
+            terrain_follow,
             speed,
             max_mission_duration,
-            name_template, total_bounds
+            name_template,
+            total_bounds
         )
     except ValueError as e:
         st.error(e)
@@ -729,7 +766,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             scan_areas, launch_points, missions).encode('utf-8')
 
         st.download_button(
-            label="Download as annotated GeoJSON file for later reference",
+            label="Download as annotated GeoJSON file",
             icon="🗺️",
             data=mission_geojson_data,
             file_name="missions.geojson",
@@ -801,10 +838,10 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 
         mission_duration_chart = alt.Chart(missions).mark_bar().encode(
             x=alt.X("duration", bin=alt.Bin(maxbins=100, extent=[0, max_mission_duration*1.2]),
-                    title=f"Mission duration (s)"),
+                    title="Mission duration (s)"),
             y=alt.Y('count()', title='Number of Missions')
         ).properties(
-            title=f"Histogram of missions durations",
+            title="Histogram of missions durations",
             width=600,
             height=400
         )
@@ -828,10 +865,10 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 
         range_chart = alt.Chart(waypoints).mark_bar().encode(
             x=alt.X("range", bin=alt.Bin(maxbins=100, extent=[0, waypoints['range'].max()]),
-                    title=f"Range of waypoint (m)"),
+                    title="Range of waypoint (m)"),
             y=alt.Y('count()', title='Number of waypoints')
         ).properties(
-            title=f"Histogram of waypoint ranges from launch point",
+            title="Histogram of waypoint ranges from launch point",
             width=600,
             height=400
         )
@@ -839,10 +876,10 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 
         waypoints_chart = alt.Chart(waypoints).mark_bar().encode(
             x=alt.X("mission_index", bin=alt.Bin(step=1, extent=[0, waypoints['mission_index'].max()+1]),
-                    title=f"Mission index"),
+                    title="Mission index"),
             y=alt.Y('count()', title='Number of waypoints')
         ).properties(
-            title=f"Number of waypoints per mission",
+            title="Number of waypoints per mission",
             width=600,
             height=400
         )
