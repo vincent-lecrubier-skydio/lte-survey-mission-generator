@@ -1,6 +1,5 @@
 
 import math
-from datetime import datetime
 from typing import Tuple, Any, Union, Optional
 import streamlit as st
 from shapely import MultiLineString, MultiPolygon, Point
@@ -10,112 +9,7 @@ from shapely.ops import transform
 import geopandas as gpd
 import numpy as np
 import pyproj
-import uuid
 from mapbox_util import ElevationProbeSingleton
-
-
-# def generate_lawnmower_pattern(polygon, spacing, passes):
-#     bounds = polygon.bounds
-#     minx, miny, maxx, maxy = bounds
-
-#     # Create a local projection centered on the polygon
-#     local_utm = pyproj.Proj(proj='utm', zone=int(
-#         (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
-#     wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
-#     project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm).transform
-#     project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84).transform
-
-#     # Convert the polygon to the local UTM coordinates
-#     utm_polygon = transform(project_to_utm, polygon)
-
-#     # Get the bounds in the local UTM coordinates
-#     minx, miny, maxx, maxy = utm_polygon.bounds
-
-#     lines = []
-
-#     if "North-South" in passes:
-#         x_coords = np.arange(minx, maxx, spacing)
-#         for i, x in enumerate(x_coords):
-#             if i % 2 == 0:
-#                 lines.append(LineString([(x, miny), (x, maxy)]))
-#             else:
-#                 lines.append(LineString([(x, maxy), (x, miny)]))
-
-#     if "East-West" in passes:
-#         y_coords = np.arange(miny, maxy, spacing)
-#         for i, y in enumerate(y_coords):
-#             if i % 2 == 0:
-#                 lines.append(LineString([(minx, y), (maxx, y)]))
-#             else:
-#                 lines.append(LineString([(maxx, y), (minx, y)]))
-
-#     lawnmower_lines = [line.intersection(utm_polygon) for line in lines]
-#     lawnmower_lines = [
-#         line for line in lawnmower_lines if not line.is_empty and line.geom_type == 'LineString']
-
-#     # Connect the lines
-#     connected_lines = []
-#     for i in range(len(lawnmower_lines) - 1):
-#         connected_lines.append(lawnmower_lines[i])
-#         start_point = lawnmower_lines[i].coords[-1]
-#         end_point = lawnmower_lines[i + 1].coords[0]
-#         connected_lines.append(LineString([start_point, end_point]))
-#     if len(lawnmower_lines) > 1:
-#         connected_lines.append(lawnmower_lines[-1])
-
-#     merged_line = linemerge(connected_lines)
-
-#     # Convert the merged line back to WGS84 coordinates
-#     wgs84_merged_line = transform(project_to_wgs84, merged_line)
-
-#     if wgs84_merged_line.geom_type == 'MultiLineString' or wgs84_merged_line.geom_type == 'GeometryCollection':
-#         coords = [
-#             coord for line in wgs84_merged_line.geoms for coord in line.coords]
-
-#     else:
-#         coords = wgs84_merged_line.coords
-
-#     for point in coords:
-#         point = list(point)
-
-#     return LineString(coords)
-
-
-# def split_polygon_into_squares(polygon, size):
-#     bounds = polygon.bounds
-#     minx, miny, maxx, maxy = bounds
-
-#     # Create a local projection centered on the polygon
-#     local_utm = pyproj.Proj(proj='utm', zone=int(
-#         (minx + maxx) / 2 // 6) + 31, ellps='WGS84')
-#     wgs84 = pyproj.Proj(proj='latlong', datum='WGS84')
-#     project_to_utm = pyproj.Transformer.from_proj(wgs84, local_utm).transform
-#     project_to_wgs84 = pyproj.Transformer.from_proj(local_utm, wgs84).transform
-
-#     # Convert the polygon to the local UTM coordinates
-#     utm_polygon = transform(project_to_utm, polygon)
-
-#     # Get the bounds in the local UTM coordinates
-#     minx, miny, maxx, maxy = utm_polygon.bounds
-
-#     squares = []
-#     x_coords = np.arange(minx, maxx, size)
-#     y_coords = np.arange(miny, maxy, size)
-
-#     for x in x_coords:
-#         for y in y_coords:
-#             square = Polygon([
-#                 (x, y),
-#                 (x + size, y),
-#                 (x + size, y + size),
-#                 (x, y + size),
-#                 (x, y)
-#             ])
-#             intersection = utm_polygon.intersection(square)
-#             if not intersection.is_empty:
-#                 squares.append(transform(project_to_wgs84, intersection))
-
-#     return squares
 
 
 def ensure_3d_coordinates(coord: Union[Tuple[float, float], Tuple[float, float, float]]) -> Tuple[float, float, float]:
@@ -647,12 +541,15 @@ def compute_total_mission_path(
 
     # Recreate the full mission path by:
     # 1. Adding the launch point to the start of the mission path
-    # 2. Adding the mission passes
-    # 3. Adding the launch point to the end of the mission path
+    # 2. Adding trajectory fromlaunch point to mission start
+    # 3. Adding the mission passes
+    # 4. Adding the launch point to the end of the mission path
+    # 5. Adding trajectory from the end of the mission path to the launch point
+    # 5. Adding the launch point to the end of the mission path
     # And then merging the segments
     all_coords = []
 
-    # all_coords.append(launch_point.geometry.coords[0])
+    all_coords.extend([launch_point.geometry.coords[0]])
 
     go_from_launch = adjust_linestring_altitude_simplified_terrain_follow(
         LineString([launch_point.geometry.coords[0],
@@ -701,7 +598,7 @@ def compute_total_mission_path(
     # Add intermediate waypoints of go_to_launch
     all_coords.extend(go_to_launch.coords[1:])
 
-    # all_coords.append(launch_point.geometry.coords[0])
+    all_coords.extend([launch_point.geometry.coords[0]])
 
     mission_path = LineString([ensure_3d_coordinates(coords)
                               for coords in all_coords])

@@ -223,7 +223,8 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
                     "isSkippable": False
                 }
             }
-            for point in linestring.coords
+            # For all points in the linestring except first and last (which are exactly launch point)
+            for point in linestring.coords[1:-1]
         ]
 
         # return json string
@@ -765,7 +766,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             scan_areas, launch_points, missions).encode('utf-8')
 
         st.download_button(
-            label="Download as annotated GeoJSON file for later reference",
+            label="Download as annotated GeoJSON file",
             icon="🗺️",
             data=mission_geojson_data,
             file_name="missions.geojson",
