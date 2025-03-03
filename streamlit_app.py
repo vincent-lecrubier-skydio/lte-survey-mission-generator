@@ -22,7 +22,7 @@ import math
 import zipfile
 import warnings
 
-from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe, adjust_linestring_altitude_terrain_follow, adjust_linestring_altitude_flat
+from geometry import generate_oriented_slices, compute_total_mission_path, generate_passes, project_df, stgeodataframe
 from mapbox_util import reverse_geocode, ElevationProbeSingleton
 
 warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
