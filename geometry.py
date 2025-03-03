@@ -674,7 +674,7 @@ def simplify_3d_linestring(linestring_path: LineString, horizontal_tolerance: fl
 
     for i in range(1, len(points) - 1):
         start, candidate, end = np.array(points[prev_index]), np.array(
-            points[i]), np.array(points[-1])
+            points[i]), np.array(points[i+1])
 
         # Compute the expected position of the candidate on the straight line from start to end
         vec_start_end = end[:2] - start[:2]  # Horizontal direction vector
