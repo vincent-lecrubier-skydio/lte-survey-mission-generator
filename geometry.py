@@ -655,7 +655,7 @@ def adjust_linestring_altitude_flat(linestring_path: LineString, altitude: float
     return updated_linestring_path
 
 
-def simplify_3d_linestring(linestring_path: LineString, horizontal_tolerance: float, vertical_tolerance: float) -> LineString:
+def simplify_3d_linestring_dumb(linestring_path: LineString, horizontal_tolerance: float, vertical_tolerance: float) -> LineString:
     """
     Simplifies a 3D linestring by removing intermediate points strategically,
     ensuring horizontal and vertical deviations stay within given tolerances.
@@ -703,6 +703,80 @@ def simplify_3d_linestring(linestring_path: LineString, horizontal_tolerance: fl
 
     simplified.append(points[-1])
     return LineString(simplified)
+
+
+def simplify_3d_linestring(linestring_path, horizontal_tolerance, vertical_tolerance):
+    """
+    Simplifies a 3D linestring using a recursive approach (Douglas-Peucker)
+    with separate horizontal and vertical tolerances.
+
+    :param linestring_path: A shapely.geometry.LineString representing the 3D line.
+    :param horizontal_tolerance: Maximum allowed horizontal deviation.
+    :param vertical_tolerance: Maximum allowed vertical deviation.
+    :return: A simplified shapely.geometry.LineString.
+    """
+    points = list(linestring_path.coords)
+    if len(points) < 3:
+        return linestring_path
+
+    def point_deviation(start, end, pt):
+        # Convert to numpy arrays
+        start = np.array(start)
+        end = np.array(end)
+        pt = np.array(pt)
+
+        # Horizontal deviation
+        vec = end[:2] - start[:2]
+        norm = np.linalg.norm(vec)
+        if norm == 0:
+            horizontal_dev = np.linalg.norm(pt[:2] - start[:2])
+        else:
+            vec_norm = vec / norm
+            projection = start[:2] + vec_norm * \
+                np.dot(pt[:2] - start[:2], vec_norm)
+            horizontal_dev = np.linalg.norm(pt[:2] - projection)
+
+        # Vertical deviation
+        if norm == 0:
+            expected_z = start[2]
+        else:
+            ratio = np.linalg.norm(pt[:2] - start[:2]) / norm
+            expected_z = start[2] + (end[2] - start[2]) * ratio
+        vertical_dev = abs(pt[2] - expected_z)
+        return horizontal_dev, vertical_dev
+
+    def rdp_recursive(pts, start_index, end_index):
+        if end_index <= start_index + 1:
+            return [pts[start_index]]
+        max_horiz = 0
+        max_vert = 0
+        index_of_max = None
+
+        start_pt = pts[start_index]
+        end_pt = pts[end_index]
+        # Check all intermediate points
+        for i in range(start_index + 1, end_index):
+            horiz_dev, vert_dev = point_deviation(start_pt, end_pt, pts[i])
+            if horiz_dev > max_horiz or vert_dev > max_vert:
+                # Combine deviations in a tuple comparison
+                if (horiz_dev, vert_dev) > (max_horiz, max_vert):
+                    max_horiz = horiz_dev
+                    max_vert = vert_dev
+                    index_of_max = i
+
+        if (max_horiz > horizontal_tolerance) or (max_vert > vertical_tolerance):
+            # Recursively simplify the two segments
+            left_segment = rdp_recursive(pts, start_index, index_of_max)
+            right_segment = rdp_recursive(pts, index_of_max, end_index)
+            # Avoid duplicating the middle point
+            return left_segment + right_segment[1:]
+        else:
+            return [pts[start_index]]
+
+    simplified_pts = rdp_recursive(points, 0, len(points) - 1)
+    # Ensure the last point is added
+    simplified_pts.append(points[-1])
+    return LineString(simplified_pts)
 
 
 def adjust_linestring_altitude_simplified_terrain_follow(linestring_path, altitude, project_to_wgs84, project_to_utm, max_segment_length=100, horizontal_tolerance=1.0, vertical_tolerance=10.0):
