@@ -586,6 +586,13 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             """)
 
         terrain_follow = st.toggle("Terrain Follow", value=True)
+        # st.markdown(
+        #     f"Terrain follow = {'Yes' if terrain_follow else 'No, fixed altitude above launch point'}")
+
+        pass_crosshatch = st.toggle(
+            "Crosshatch passes", value=False)
+        # st.markdown(
+        #     f"Crosshatch pass = {'Yes' if pass_crosshatch else 'No'}")
 
         max_mission_duration = st.number_input(
             "Target mission duration, in seconds:", min_value=0, value=20*60)
@@ -611,11 +618,6 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             "Direction of mission passes, in degrees (0=North, 90=East):", min_value=0, max_value=360, value=0)
         st.markdown(
             f"Passes Direction = {pass_direction:.0f}deg")
-
-        pass_crosshatch = st.checkbox(
-            "Crosshatch passes", value=False)
-        st.markdown(
-            f"Crosshatch pass = {'Yes' if pass_crosshatch else 'No'}")
 
         speed = st.number_input(
             "Flight speed in meters per second:", min_value=0, value=16)
