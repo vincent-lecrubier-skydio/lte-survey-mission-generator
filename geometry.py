@@ -393,9 +393,13 @@ def compute_optimal_mission_configuration(
             [mission_passes_right, mission_crosshatch_passes_right]
         ]
 
+    cleaned_configurations = [
+        [gdf for gdf in gdfs if not gdf.empty] for gdfs in configurations
+    ]
+
     min_distance = float('inf')
     argmin_distance = None
-    for config in configurations:
+    for config in cleaned_configurations:
         mission_start, mission_end = get_start_end_points(config)
         transition_distance = get_transitions_distance(config)
         for launch_point in launch_points.itertuples():
@@ -469,10 +473,11 @@ def get_start_end_points(gdfs: list[gpd.GeoSeries]) -> Tuple[Point, Point]:
 
     return start_point, end_point
 
-# Function to reverse the geometry
-
 
 def reverse_geometry(geometry):
+    """
+    Reverse a LineString or MultiLineString geometry by reversing the order of its coordinates.
+    """
     if isinstance(geometry, LineString):
         # Reverse the coordinates of a LineString
         return LineString(geometry.coords[::-1])
