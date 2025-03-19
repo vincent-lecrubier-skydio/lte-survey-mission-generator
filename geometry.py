@@ -556,9 +556,21 @@ def compute_total_mission_path(
 
     all_coords.extend([launch_point.geometry.coords[0]])
 
+    if mission_passes_optimal.iloc[0].geom_type == "LineString":
+        go_from_launch_2d = LineString([
+            launch_point.geometry.coords[0],
+            mission_passes_optimal.iloc[0].coords[0]
+        ])
+    elif mission_passes_optimal.iloc[0].geom_type == "MultiLineString":
+        go_from_launch_2d = LineString([
+            launch_point.geometry.coords[0],
+            mission_passes_optimal.iloc[0].geoms[0].coords[0]
+        ])
+    else:
+        raise ValueError("Invalid geometry type in mission passes.")
+
     go_from_launch = adjust_linestring_altitude_simplified_terrain_follow(
-        LineString([launch_point.geometry.coords[0],
-                   mission_passes_optimal.iloc[0].coords[0]]),
+        go_from_launch_2d,
         altitude,
         project_to_wgs84,
         project_to_utm,
@@ -588,11 +600,13 @@ def compute_total_mission_path(
             else:
                 raise ValueError("Invalid geometry type in mission passes.")
 
+    go_to_launch_2d = LineString([
+        all_coords[-1],
+        launch_point.geometry.coords[0]
+    ])
+
     go_to_launch = adjust_linestring_altitude_simplified_terrain_follow(
-        LineString([
-            all_coords[-1],
-            launch_point.geometry.coords[0]
-        ]),
+        go_to_launch_2d,
         altitude,
         project_to_wgs84,
         project_to_utm,
