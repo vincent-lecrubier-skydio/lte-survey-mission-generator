@@ -263,6 +263,25 @@ def preprocess(geojson_file) -> pd.DataFrame:
 
     df = gpd.read_file(geojson_file)
 
+    preprocess_progress_bar.progress(5, text="Cleaning geometries")
+
+    # Drop rows with invalid or null geometry
+    initial_count = len(df)
+    df = df[df.geometry.notnull()]
+    df = df[df.geometry.is_valid]
+    cleaned_count = len(df)
+
+    removed_count = initial_count - cleaned_count
+    if removed_count > 0:
+        st.warning(f"{removed_count} invalid or null geometries removed from the input GeoJSON.")
+
+    # Keep only Points and Polygons
+    valid_types = ["Point", "Polygon"]
+    df = df[df.geometry.type.isin(valid_types)]
+    if len(df) == 0:
+        preprocess_progress_bar.empty()
+        raise ValueError("No valid geometries (Points or Polygons) found after cleaning the input file.")
+
     preprocess_progress_bar.progress(10, text="Getting center")
 
     center_coords = [df.geometry.iloc[0].centroid.y,
