@@ -10,6 +10,7 @@ from shapely.geometry import mapping
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import geopandas as gpd
 import folium
 import time
@@ -43,8 +44,43 @@ def gdfs_to_json(*gdfs):
     features = []
     for gdf in gdfs:
         for _, row in gdf.iterrows():
-            properties = {key: value for key, value in row.items(
-            ) if key != 'geometry' and pd.notnull(value)}
+            properties = {}
+            for key, value in row.items():
+                if key == 'geometry':
+                    continue
+                # Handle numpy scalars
+                try:
+                    if isinstance(value, np.generic):
+                        scalar = value.item()
+                        if pd.notnull(scalar):
+                            properties[key] = scalar
+                        continue
+                except Exception:
+                    pass
+
+                # Handle arrays/iterables (ndarray, list, tuple, Series)
+                if isinstance(value, (np.ndarray, list, tuple, pd.Series)):
+                    # Convert elements to Python types and filter out all-null sequences
+                    lst = []
+                    for v in value:
+                        if isinstance(v, np.generic):
+                            lst.append(v.item())
+                        else:
+                            lst.append(v)
+                    if not all(pd.isnull(x) for x in lst):
+                        properties[key] = lst
+                    continue
+
+                # Fallback for scalars
+                if pd.notnull(value):
+                    # Convert numpy scalar-like to native python
+                    try:
+                        if hasattr(value, 'item') and not isinstance(value, (str, bytes)):
+                            properties[key] = value.item()
+                        else:
+                            properties[key] = value
+                    except Exception:
+                        properties[key] = value
             feature = {
                 "type": "Feature",
                 "properties": properties,
@@ -273,14 +309,16 @@ def preprocess(geojson_file) -> pd.DataFrame:
 
     removed_count = initial_count - cleaned_count
     if removed_count > 0:
-        st.warning(f"{removed_count} invalid or null geometries removed from the input GeoJSON.")
+        st.warning(
+            f"{removed_count} invalid or null geometries removed from the input GeoJSON.")
 
     # Keep only Points and Polygons
     valid_types = ["Point", "Polygon"]
     df = df[df.geometry.type.isin(valid_types)]
     if len(df) == 0:
         preprocess_progress_bar.empty()
-        raise ValueError("No valid geometries (Points or Polygons) found after cleaning the input file.")
+        raise ValueError(
+            "No valid geometries (Points or Polygons) found after cleaning the input file.")
 
     preprocess_progress_bar.progress(10, text="Getting center")
 
@@ -575,7 +613,8 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
     with st.expander("View map of scan areas and launch points"):
         m = folium.Map(location=center_coords, zoom_start=12)
         folium.GeoJson(
-            pd.concat([launch_points_df, scan_areas_df]),
+            json.loads(gdfs_to_json(
+                pd.concat([launch_points_df, scan_areas_df]))),
             style_function=simplestyle_style_function,
             popup=GeoJsonPopup(
                 fields=["name"],
@@ -720,7 +759,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 
                 m = folium.Map(location=center_coords, zoom_start=12)
                 folium.GeoJson(
-                    e.scan_areas,
+                    json.loads(gdfs_to_json(e.scan_areas)),
                     style_function=simplestyle_style_function,
                     popup=GeoJsonPopup(
                         fields=["name"],
@@ -731,7 +770,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
                     ),
                 ).add_to(m)
                 folium.GeoJson(
-                    e.launch_points,
+                    json.loads(gdfs_to_json(e.launch_points)),
                     style_function=simplestyle_style_function,
                     popup=GeoJsonPopup(
                         fields=["name", "address"],
@@ -742,15 +781,8 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
                     ),
                 ).add_to(m)
                 folium.GeoJson(
-                    e.location,
+                    json.loads(gdfs_to_json(e.location)),
                     style_function=simplestyle_style_function,
-                    # popup=GeoJsonPopup(
-                    #     fields=["name"],
-                    #     aliases=["Name"],
-                    #     localize=True,
-                    #     labels=True,
-                    #     style="background-color: yellow;",
-                    # ),
                 ).add_to(m)
 
                 st_folium(m, width=700, height=500, return_on_hover=False)
@@ -796,7 +828,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
 
         m = folium.Map(location=center_coords, zoom_start=12)
         folium.GeoJson(
-            scan_areas,
+            json.loads(gdfs_to_json(scan_areas)),
             style_function=simplestyle_style_function,
             # style_function=lambda x: {"color": "#000000", "weight": 3},
             # popup=GeoJsonPopup(
@@ -808,7 +840,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
             # ),
         ).add_to(m)
         folium.GeoJson(
-            launch_points,
+            json.loads(gdfs_to_json(launch_points)),
             style_function=simplestyle_style_function,
             # style_function=lambda x: {"color": "#0000ff", "weight": 3},
             popup=GeoJsonPopup(
@@ -836,7 +868,7 @@ Use [geojson.io](https://geojson.io) to create your geojson files. Example valid
         #     ).add_to(m)
 
         folium.GeoJson(
-            missions,
+            json.loads(gdfs_to_json(missions)),
             # style_function=lambda x: {
             #     "color": x['properties']["stroke"],
             #     "weight": x['properties']["stroke-width"]
