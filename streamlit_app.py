@@ -234,6 +234,10 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
                                                 "headingMode": 7,
                                                 "ignoreTargetGimbalPitch": False,
                                                 "gimbalPitchMode": 1
+                                            },
+                                            "terminationArgs": {
+                                                "xyPositionThreshold": 10.0,
+                                                "zPositionThreshold": 5.0
                                             }
                                         }
                                     },
