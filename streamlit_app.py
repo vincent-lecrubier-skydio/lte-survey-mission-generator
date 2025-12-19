@@ -161,6 +161,8 @@ def compute_mission_duration(
 
 def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
     linestring = row.geometry
+    start_longitude = linestring.coords[0][0]
+    start_latitude = linestring.coords[0][1]
     start_altitude = linestring.coords[0][2]
     with open("mission.proto.json", "r", encoding="utf8") as mission_proto_file:
         mission_proto = json.load(mission_proto_file)
@@ -169,6 +171,12 @@ def generate_mission(row, altitude, rtx_height, rtx_speed, rtx_wait):
         mission_proto["rtxSettings"]["minimumHeight"] = rtx_height
         mission_proto["rtxSettings"]["speed"] = rtx_speed
         mission_proto["rtxSettings"]["waitTime"] = rtx_wait
+        mission_proto["expectedGpsOrigin"] = {
+            "lon": start_longitude,
+            "lat": start_latitude,
+            "gpsAltitude": start_altitude,
+            "gpsHeading": 0
+        }
         mission_proto["actions"][0]["actionUuid"] = str(uuid.uuid4())
         mission_proto['actions'][0]['args']['sequence']["actions"] = [
             {
